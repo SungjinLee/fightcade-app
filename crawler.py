@@ -1,11 +1,11 @@
 """
-크롤러 모듈 (API 방식)
+크롤러 모듈 (API 방식 + Cloudflare 우회)
 - Fightcade 공식 API 사용
-- Selenium 불필요, 클라우드 호환성 향상
+- cloudscraper로 Cloudflare 챌린지 우회
 - 디버그 모드 지원
 """
 
-import requests
+import cloudscraper
 from typing import List, Dict, Any, Optional
 from config import MAX_PAGES_TO_CRAWL, ROWS_PER_PAGE
 
@@ -15,14 +15,21 @@ from config import MAX_PAGES_TO_CRAWL, ROWS_PER_PAGE
 # =============================================================================
 API_BASE_URL = "https://www.fightcade.com/api"
 
-# 요청 헤더 (Cloudflare 우회 시도)
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.fightcade.com/",
-    "Origin": "https://www.fightcade.com",
-}
+
+# =============================================================================
+# Scraper 생성
+# =============================================================================
+
+def _create_scraper():
+    """Cloudflare 우회 스크래퍼 생성"""
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        }
+    )
+    return scraper
 
 
 # =============================================================================
@@ -31,42 +38,50 @@ HEADERS = {
 
 def _api_request(endpoint: str, method: str = "GET", data: dict = None) -> Dict[str, Any]:
     """
-    API 요청 수행
+    API 요청 수행 (Cloudflare 우회)
     
     Returns:
-        {"success": bool, "data": Any, "error": str}
+        {"success": bool, "data": Any, "error": str, "debug": dict}
     """
     url = f"{API_BASE_URL}/{endpoint}"
     
     try:
+        scraper = _create_scraper()
+        
         if method == "GET":
-            response = requests.get(url, headers=HEADERS, timeout=30)
+            response = scraper.get(url, timeout=30)
         else:
-            response = requests.post(url, headers=HEADERS, json=data, timeout=30)
+            response = scraper.post(url, json=data, timeout=30)
         
         # 디버그 정보
         debug_info = {
             "url": url,
             "status_code": response.status_code,
-            "headers": dict(response.headers),
-            "content_preview": response.text[:500] if response.text else ""
+            "content_preview": response.text[:500] if response.text else "",
+            "method": method
         }
         
         if response.status_code == 200:
             try:
-                return {"success": True, "data": response.json(), "debug": debug_info}
-            except Exception:
-                return {"success": True, "data": response.text, "debug": debug_info}
+                json_data = response.json()
+                return {"success": True, "data": json_data, "debug": debug_info}
+            except Exception as e:
+                return {
+                    "success": False, 
+                    "error": f"JSON 파싱 오류: {str(e)}", 
+                    "data": response.text,
+                    "debug": debug_info
+                }
         elif response.status_code == 403:
             return {
                 "success": False, 
-                "error": "Cloudflare 차단됨 (403). Fightcade 서버에서 접근을 제한하고 있습니다.",
+                "error": "Cloudflare 차단됨 (403). cloudscraper로도 우회 실패.",
                 "debug": debug_info
             }
         elif response.status_code == 503:
             return {
                 "success": False,
-                "error": "서버 점검 중이거나 Cloudflare 챌린지가 필요합니다 (503).",
+                "error": "서버 점검 중 (503)",
                 "debug": debug_info
             }
         else:
@@ -76,12 +91,18 @@ def _api_request(endpoint: str, method: str = "GET", data: dict = None) -> Dict[
                 "debug": debug_info
             }
             
-    except requests.exceptions.Timeout:
-        return {"success": False, "error": "요청 시간 초과 (30초)", "debug": {"url": url}}
-    except requests.exceptions.ConnectionError as e:
-        return {"success": False, "error": f"연결 오류: {str(e)}", "debug": {"url": url}}
+    except cloudscraper.exceptions.CloudflareChallengeError as e:
+        return {
+            "success": False, 
+            "error": f"Cloudflare 챌린지 실패: {str(e)}",
+            "debug": {"url": url, "exception": "CloudflareChallengeError"}
+        }
     except Exception as e:
-        return {"success": False, "error": f"알 수 없는 오류: {str(e)}", "debug": {"url": url}}
+        return {
+            "success": False, 
+            "error": f"요청 오류: {str(e)}",
+            "debug": {"url": url, "exception": type(e).__name__}
+        }
 
 
 def get_user_replays(username: str, limit: int = 75, offset: int = 0) -> Dict[str, Any]:
@@ -121,17 +142,6 @@ def get_user_info(username: str) -> Dict[str, Any]:
 def _parse_replay_to_match(replay: Dict, user_a: str, user_b: str) -> Optional[Dict[str, Any]]:
     """
     리플레이 데이터를 매치 데이터로 변환
-    
-    리플레이 구조 예시:
-    {
-        "quarkid": "...",
-        "channelname": "kof98",
-        "players": [
-            {"name": "player1", "score": 3, ...},
-            {"name": "player2", "score": 1, ...}
-        ],
-        ...
-    }
     """
     try:
         players = replay.get("players", [])
@@ -175,21 +185,6 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
                             progress_callback=None) -> Dict[str, Any]:
     """
     두 유저 간의 대전 기록 조회 (API 방식)
-    
-    Args:
-        user_a: 첫 번째 유저 ID
-        user_b: 두 번째 유저 ID
-        max_pages: 최대 페이지 수 (페이지당 15개 = 75개까지)
-        progress_callback: 진행 상황 콜백 함수
-    
-    Returns:
-        {
-            "success": bool,
-            "matches": List[Dict],
-            "summary": {...},
-            "error": Optional[str],
-            "debug": Optional[Dict]  # 디버그 정보
-        }
     """
     result = {
         "success": False,
@@ -210,10 +205,9 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
             progress_callback(msg)
         print(msg)
     
-    # 총 가져올 리플레이 수
-    total_limit = max_pages * ROWS_PER_PAGE  # 기본 75개
+    total_limit = max_pages * ROWS_PER_PAGE
     
-    log(f"📡 {user_a}의 리플레이 데이터 조회 중...")
+    log(f"📡 {user_a}의 리플레이 데이터 조회 중... (cloudscraper 사용)")
     
     # API 호출
     api_result = get_user_replays(user_a, limit=total_limit, offset=0)
@@ -235,12 +229,14 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
     
     # 응답 구조 확인
     if isinstance(replays_data, dict):
-        replays = replays_data.get("results", replays_data.get("replays", []))
+        replays = replays_data.get("results", replays_data.get("replays", replays_data.get("res", [])))
+        if not replays and "qupiresults" in str(replays_data):
+            replays = replays_data.get("results", {}).get("results", [])
     elif isinstance(replays_data, list):
         replays = replays_data
     else:
         result["error"] = f"예상치 못한 응답 형식: {type(replays_data)}"
-        result["debug"].append({"response_type": str(type(replays_data)), "preview": str(replays_data)[:200]})
+        result["debug"].append({"response_type": str(type(replays_data)), "preview": str(replays_data)[:500]})
         return result
     
     log(f"📊 총 {len(replays)}개의 리플레이 발견")
@@ -256,7 +252,7 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
     
     if not all_matches:
         result["error"] = f"'{user_a}'와 '{user_b}' 간의 대전 기록이 없습니다."
-        result["success"] = True  # API는 성공했지만 매치가 없음
+        result["success"] = True
         return result
     
     # 결과 집계
@@ -273,7 +269,7 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
         "user_b_id": user_b
     }
     
-    log(f"✅ 완료! 총 {len(all_matches)}경기, {user_a}: {user_a_wins}승, {user_b}: {user_b_wins}승")
+    log(f"✅ 완료! 총 {len(all_matches)}경기")
     
     return result
 
@@ -285,44 +281,36 @@ def check_user_exists_sync(user_id: str) -> bool:
 
 
 # =============================================================================
-# 테스트 함수 (디버깅용)
+# 테스트 함수
 # =============================================================================
 
 def test_api_connection() -> Dict[str, Any]:
-    """
-    API 연결 테스트
-    Streamlit에서 디버그 버튼으로 호출 가능
-    """
+    """API 연결 테스트"""
     results = {}
     
-    # 테스트 1: 기본 연결
     try:
-        response = requests.get(
-            "https://www.fightcade.com/",
-            headers=HEADERS,
-            timeout=10
-        )
+        scraper = _create_scraper()
+        
+        # 테스트 1: 메인 사이트
+        response = scraper.get("https://www.fightcade.com/", timeout=10)
         results["main_site"] = {
             "status": response.status_code,
-            "cloudflare": "cf-ray" in response.headers,
-            "headers": dict(response.headers)
+            "ok": response.status_code == 200
         }
-    except Exception as e:
-        results["main_site"] = {"error": str(e)}
-    
-    # 테스트 2: API 엔드포인트
-    try:
-        response = requests.post(
+        
+        # 테스트 2: API
+        response = scraper.post(
             f"{API_BASE_URL}/",
-            headers=HEADERS,
             json={"req": "getuser", "username": "test"},
             timeout=10
         )
-        results["api_endpoint"] = {
+        results["api"] = {
             "status": response.status_code,
-            "response_preview": response.text[:300]
+            "response_preview": response.text[:300],
+            "ok": response.status_code == 200
         }
+        
     except Exception as e:
-        results["api_endpoint"] = {"error": str(e)}
+        results["error"] = str(e)
     
     return results
