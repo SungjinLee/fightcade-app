@@ -1,17 +1,17 @@
 """
-크롤러 모듈 (Selenium Stealth)
-- Selenium + Stealth 모드로 Cloudflare 우회
-- 디버그 모드 지원
+크롤러 모듈 (Selenium Stealth + 직접 페이지 크롤링)
+- API 대신 실제 페이지에서 데이터 추출
+- XPath로 테이블 데이터 파싱
 """
 
 import time
-import json
 from typing import List, Dict, Any, Optional
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
@@ -29,7 +29,7 @@ try:
 except ImportError:
     WEBDRIVER_MANAGER_AVAILABLE = False
 
-from config import MAX_PAGES_TO_CRAWL, ROWS_PER_PAGE, API_BASE_URL
+from config import MAX_PAGES_TO_CRAWL, ROWS_PER_PAGE, XPATH
 
 
 # =============================================================================
@@ -46,13 +46,9 @@ def _create_stealth_driver() -> webdriver.Chrome:
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-extensions")
-    options.add_argument("--disable-infobars")
-    options.add_argument("--disable-notifications")
-    options.add_argument("--disable-popup-blocking")
     options.add_argument("--lang=en-US,en")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    # 봇 탐지 우회
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
     
@@ -61,21 +57,17 @@ def _create_stealth_driver() -> webdriver.Chrome:
     try:
         if WEBDRIVER_MANAGER_AVAILABLE:
             try:
-                # Chromium (Linux/Cloud)
                 service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
                 driver = webdriver.Chrome(service=service, options=options)
             except Exception:
-                # 일반 Chrome
                 service = Service(ChromeDriverManager().install())
                 driver = webdriver.Chrome(service=service, options=options)
         else:
             driver = webdriver.Chrome(options=options)
     except Exception:
-        # 시스템 크롬 직접 사용
         options.binary_location = "/usr/bin/chromium"
         driver = webdriver.Chrome(options=options)
     
-    # Stealth 모드 적용
     if STEALTH_AVAILABLE and driver:
         stealth(driver,
             languages=["en-US", "en"],
@@ -86,7 +78,6 @@ def _create_stealth_driver() -> webdriver.Chrome:
             fix_hairline=True,
         )
     
-    # 추가 봇 탐지 우회
     if driver:
         driver.execute_cdp_cmd('Network.setUserAgentOverride', {
             "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -97,78 +88,94 @@ def _create_stealth_driver() -> webdriver.Chrome:
 
 
 # =============================================================================
-# API 호출 (Selenium으로 Cloudflare 통과 후)
+# 헬퍼 함수
 # =============================================================================
 
-def _call_api_via_selenium(driver: webdriver.Chrome, req_type: str, params: dict) -> Dict[str, Any]:
-    """
-    Selenium으로 페이지 방문 후 API 호출
-    Cloudflare 쿠키를 얻은 상태에서 fetch로 API 호출
-    """
+def _safe_get_text(driver: webdriver.Chrome, xpath: str) -> Optional[str]:
+    """XPath로 텍스트 안전하게 가져오기"""
     try:
-        # API 요청 데이터
-        api_data = {"req": req_type, **params}
-        
-        # JavaScript로 fetch 실행
-        script = f"""
-        return fetch('{API_BASE_URL}/', {{
-            method: 'POST',
-            headers: {{
-                'Content-Type': 'application/json',
-            }},
-            body: JSON.stringify({json.dumps(api_data)})
-        }})
-        .then(response => response.json())
-        .then(data => JSON.stringify(data))
-        .catch(error => JSON.stringify({{error: error.toString()}}));
-        """
-        
-        result = driver.execute_script(script)
-        
-        if result:
-            return {"success": True, "data": json.loads(result)}
-        else:
-            return {"success": False, "error": "Empty response"}
-            
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        element = driver.find_element(By.XPATH, xpath)
+        return element.text.strip()
+    except NoSuchElementException:
+        return None
+    except Exception:
+        return None
 
 
-# =============================================================================
-# 매치 데이터 파싱
-# =============================================================================
-
-def _parse_replay_to_match(replay: Dict, user_a: str, user_b: str) -> Optional[Dict[str, Any]]:
-    """리플레이 데이터를 매치 데이터로 변환"""
+def _safe_click(driver: webdriver.Chrome, xpath: str, timeout: int = 10) -> bool:
+    """XPath 요소 안전하게 클릭"""
     try:
-        players = replay.get("players", [])
-        if len(players) < 2:
+        wait = WebDriverWait(driver, timeout)
+        element = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+        element.click()
+        return True
+    except Exception:
+        return False
+
+
+def _wait_for_element(driver: webdriver.Chrome, xpath: str, timeout: int = 10) -> bool:
+    """요소 대기"""
+    try:
+        wait = WebDriverWait(driver, timeout)
+        wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
+        return True
+    except TimeoutException:
+        return False
+
+
+# =============================================================================
+# 페이지 크롤링
+# =============================================================================
+
+def _parse_match_row(driver: webdriver.Chrome, row_idx: int) -> Optional[Dict[str, Any]]:
+    """단일 행에서 매치 데이터 추출"""
+    try:
+        # XPath 템플릿에 행 인덱스 적용
+        id1_xpath = XPATH["row_id1"].format(row=row_idx)
+        id2_xpath = XPATH["row_id2"].format(row=row_idx)
+        score1_xpath = XPATH["row_score1"].format(row=row_idx)
+        score2_xpath = XPATH["row_score2"].format(row=row_idx)
+        
+        id1 = _safe_get_text(driver, id1_xpath)
+        id2 = _safe_get_text(driver, id2_xpath)
+        score1_text = _safe_get_text(driver, score1_xpath)
+        score2_text = _safe_get_text(driver, score2_xpath)
+        
+        if not all([id1, id2, score1_text, score2_text]):
             return None
         
-        p1 = players[0]
-        p2 = players[1]
+        score1 = int(score1_text)
+        score2 = int(score2_text)
         
-        p1_name = p1.get("name", "").strip()
-        p2_name = p2.get("name", "").strip()
-        p1_score = int(p1.get("score", 0))
-        p2_score = int(p2.get("score", 0))
-        
-        names_lower = {p1_name.lower(), p2_name.lower()}
-        if user_a.lower() not in names_lower or user_b.lower() not in names_lower:
-            return None
-        
-        winner = p1_name if p1_score > p2_score else p2_name
+        winner = id1 if score1 > score2 else id2
         
         return {
-            "id1": p1_name,
-            "id2": p2_name,
-            "score1": p1_score,
-            "score2": p2_score,
-            "winner": winner,
-            "game": replay.get("channelname", "unknown")
+            "id1": id1,
+            "id2": id2,
+            "score1": score1,
+            "score2": score2,
+            "winner": winner
         }
     except Exception:
         return None
+
+
+def _parse_current_page(driver: webdriver.Chrome, user_a: str, user_b: str) -> List[Dict[str, Any]]:
+    """현재 페이지의 매치 데이터 파싱"""
+    matches = []
+    
+    for row_idx in range(1, ROWS_PER_PAGE + 1):
+        match = _parse_match_row(driver, row_idx)
+        if match:
+            # 두 유저 간의 매치인지 확인
+            ids = {match["id1"].lower(), match["id2"].lower()}
+            if user_a.lower() in ids and user_b.lower() in ids:
+                matches.append(match)
+        else:
+            # 더 이상 행이 없으면 종료
+            break
+    
+    return matches
 
 
 # =============================================================================
@@ -178,7 +185,7 @@ def _parse_replay_to_match(replay: Dict, user_a: str, user_b: str) -> Optional[D
 def crawl_head_to_head_sync(user_a: str, user_b: str, 
                             max_pages: int = MAX_PAGES_TO_CRAWL,
                             progress_callback=None) -> Dict[str, Any]:
-    """두 유저 간의 대전 기록 조회 (Selenium Stealth)"""
+    """두 유저 간의 대전 기록 조회 (직접 페이지 크롤링)"""
     
     result = {
         "success": False,
@@ -207,23 +214,23 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
         driver = _create_stealth_driver()
         driver.set_page_load_timeout(60)
         
-        # 먼저 메인 페이지 방문 (Cloudflare 쿠키 획득)
-        log("🔐 Cloudflare 인증 중...")
-        driver.get("https://www.fightcade.com/")
+        # 1. 유저 페이지로 이동
+        user_url = f"https://www.fightcade.com/id/{user_a}"
+        log(f"📡 {user_a}의 페이지로 이동 중...")
+        driver.get(user_url)
+        time.sleep(3)
         
-        # Cloudflare 챌린지 대기 (최대 15초)
-        time.sleep(5)
-        
-        # 페이지 로드 확인
+        # Cloudflare 체크
         page_source = driver.page_source
         if "Just a moment" in page_source:
-            log("⏳ Cloudflare 챌린지 처리 중... (최대 15초)")
+            log("⏳ Cloudflare 챌린지 처리 중...")
             time.sleep(10)
             page_source = driver.page_source
         
         result["debug"].append({
-            "step": "cloudflare_check",
-            "passed": "Just a moment" not in page_source,
+            "step": "user_page",
+            "url": user_url,
+            "cloudflare_passed": "Just a moment" not in page_source,
             "title": driver.title
         })
         
@@ -231,95 +238,82 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
             result["error"] = "Cloudflare 챌린지 통과 실패"
             return result
         
-        log(f"✅ Cloudflare 통과! {user_a}의 데이터 조회 중...")
+        # 2. Replay 탭 클릭
+        log("🎬 Replay 탭으로 이동 중...")
+        time.sleep(2)
         
-        # API 호출
-        total_limit = max_pages * ROWS_PER_PAGE
-        api_result = _call_api_via_selenium(driver, "searchquarks", {
-            "username": user_a,
-            "limit": total_limit,
-            "offset": 0
-        })
-        
-        result["debug"].append({
-            "step": "api_call",
-            "success": api_result.get("success"),
-            "has_data": "data" in api_result
-        })
-        
-        if not api_result["success"]:
-            result["error"] = f"API 호출 실패: {api_result.get('error', 'Unknown')}"
+        if not _safe_click(driver, XPATH["replay_tab"]):
+            result["error"] = "Replay 탭을 찾을 수 없습니다."
+            result["debug"].append({"step": "replay_tab", "success": False})
             return result
         
-        # 데이터 파싱
-        data = api_result.get("data", {})
+        time.sleep(3)
+        result["debug"].append({"step": "replay_tab", "success": True})
         
-        # 디버그: 전체 응답 구조 확인
-        result["debug"].append({
-            "step": "api_response",
-            "data_keys": list(data.keys()) if isinstance(data, dict) else "not_dict",
-            "data_preview": str(data)[:1000]
-        })
+        # 3. 검색창에 상대방 ID 입력
+        log(f"🔍 {user_b} 검색 중...")
         
-        replays = data.get("results", data.get("res", []))
+        try:
+            wait = WebDriverWait(driver, 10)
+            search_input = wait.until(
+                EC.presence_of_element_located((By.XPATH, XPATH["search_input"]))
+            )
+            search_input.clear()
+            search_input.send_keys(user_b)
+            search_input.send_keys(Keys.ENTER)
+            time.sleep(3)
+            result["debug"].append({"step": "search", "query": user_b, "success": True})
+        except Exception as e:
+            result["error"] = f"검색창을 찾을 수 없습니다: {str(e)}"
+            result["debug"].append({"step": "search", "success": False, "error": str(e)})
+            return result
         
-        if isinstance(replays, dict):
-            result["debug"].append({
-                "step": "replays_is_dict",
-                "replays_keys": list(replays.keys())
-            })
-            replays = replays.get("results", [])
-        
-        # 디버그: 첫 번째 리플레이 구조 확인
-        if replays and len(replays) > 0:
-            result["debug"].append({
-                "step": "first_replay",
-                "replay_keys": list(replays[0].keys()) if isinstance(replays[0], dict) else "not_dict",
-                "replay_preview": str(replays[0])[:500]
-            })
-        
-        log(f"📊 총 {len(replays)}개의 리플레이 발견")
-        
-        # 매치 필터링
+        # 4. 테이블에서 데이터 추출
         all_matches = []
-        filter_debug = {"total_checked": 0, "no_players": 0, "not_matched": 0, "matched": 0, "sample_players": []}
         
-        for replay in replays:
-            filter_debug["total_checked"] += 1
-            match = _parse_replay_to_match(replay, user_a, user_b)
-            if match:
-                all_matches.append(match)
-                filter_debug["matched"] += 1
-            else:
-                # 왜 매치 안 됐는지 확인
-                players = replay.get("players", [])
-                if len(players) < 2:
-                    filter_debug["no_players"] += 1
-                else:
-                    filter_debug["not_matched"] += 1
-                    # 샘플로 몇 개 저장
-                    if len(filter_debug["sample_players"]) < 3:
-                        filter_debug["sample_players"].append({
-                            "p1": players[0].get("name", "?") if players else "?",
-                            "p2": players[1].get("name", "?") if len(players) > 1 else "?",
-                            "raw": str(players)[:200]
-                        })
+        for page_num in range(1, max_pages + 1):
+            log(f"📄 페이지 {page_num}/{max_pages} 크롤링 중...")
+            
+            # 테이블 로딩 대기
+            time.sleep(2)
+            
+            # 현재 페이지 파싱
+            page_matches = _parse_current_page(driver, user_a, user_b)
+            
+            result["debug"].append({
+                "step": f"page_{page_num}",
+                "matches_found": len(page_matches)
+            })
+            
+            if not page_matches:
+                # 데이터가 없으면 첫 번째 행이라도 확인
+                test_id1 = _safe_get_text(driver, XPATH["row_id1"].format(row=1))
+                result["debug"].append({
+                    "step": f"page_{page_num}_check",
+                    "first_row_id1": test_id1,
+                    "page_source_preview": driver.page_source[:500] if not test_id1 else "skipped"
+                })
+                
+                if page_num == 1:
+                    log("⚠️ 첫 페이지에 데이터가 없습니다.")
+                break
+            
+            all_matches.extend(page_matches)
+            log(f"   → {len(page_matches)}개 매치 발견 (누적: {len(all_matches)}개)")
+            
+            # 다음 페이지로 이동
+            if page_num < max_pages:
+                if not _safe_click(driver, XPATH["next_page"], timeout=5):
+                    log(f"   → 마지막 페이지입니다.")
+                    break
+                time.sleep(2)
         
-        result["debug"].append({
-            "step": "filter_result",
-            "user_a": user_a,
-            "user_b": user_b,
-            "filter_stats": filter_debug
-        })
-        
-        log(f"🎮 {user_b}와의 매치: {len(all_matches)}개")
-        
+        # 결과 집계
         if not all_matches:
             result["error"] = f"'{user_a}'와 '{user_b}' 간의 대전 기록이 없습니다."
             result["success"] = True
             return result
         
-        # 결과 집계
         user_a_wins = sum(1 for m in all_matches if m["winner"].lower() == user_a.lower())
         user_b_wins = sum(1 for m in all_matches if m["winner"].lower() == user_b.lower())
         
@@ -333,7 +327,7 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
             "user_b_id": user_b
         }
         
-        log(f"✅ 완료! {user_a}: {user_a_wins}승, {user_b}: {user_b_wins}승")
+        log(f"✅ 완료! 총 {len(all_matches)}경기, {user_a}: {user_a_wins}승, {user_b}: {user_b_wins}승")
         
     except Exception as e:
         result["error"] = f"오류: {str(e)}"
@@ -351,7 +345,7 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
 
 def check_user_exists_sync(user_id: str) -> bool:
     """유저 존재 여부 확인"""
-    return True  # 간소화
+    return True
 
 
 # =============================================================================
@@ -359,7 +353,7 @@ def check_user_exists_sync(user_id: str) -> bool:
 # =============================================================================
 
 def test_api_connection() -> Dict[str, Any]:
-    """API 연결 테스트 (Selenium Stealth)"""
+    """연결 테스트"""
     results = {
         "stealth_available": STEALTH_AVAILABLE,
         "webdriver_manager": WEBDRIVER_MANAGER_AVAILABLE
@@ -370,24 +364,15 @@ def test_api_connection() -> Dict[str, Any]:
         driver = _create_stealth_driver()
         driver.set_page_load_timeout(30)
         
-        # 메인 사이트 테스트
-        driver.get("https://www.fightcade.com/")
+        # 유저 페이지 테스트
+        driver.get("https://www.fightcade.com/id/test")
         time.sleep(5)
         
         page_source = driver.page_source
-        results["main_site"] = {
+        results["user_page"] = {
             "title": driver.title,
-            "cloudflare_challenge": "Just a moment" in page_source,
-            "passed": "Just a moment" not in page_source
+            "cloudflare_passed": "Just a moment" not in page_source
         }
-        
-        if "Just a moment" not in page_source:
-            # API 테스트
-            api_result = _call_api_via_selenium(driver, "getuser", {"username": "test"})
-            results["api"] = {
-                "success": api_result.get("success"),
-                "has_data": "data" in api_result
-            }
         
     except Exception as e:
         results["error"] = str(e)
