@@ -253,19 +253,64 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
         
         # 데이터 파싱
         data = api_result.get("data", {})
+        
+        # 디버그: 전체 응답 구조 확인
+        result["debug"].append({
+            "step": "api_response",
+            "data_keys": list(data.keys()) if isinstance(data, dict) else "not_dict",
+            "data_preview": str(data)[:1000]
+        })
+        
         replays = data.get("results", data.get("res", []))
         
         if isinstance(replays, dict):
+            result["debug"].append({
+                "step": "replays_is_dict",
+                "replays_keys": list(replays.keys())
+            })
             replays = replays.get("results", [])
+        
+        # 디버그: 첫 번째 리플레이 구조 확인
+        if replays and len(replays) > 0:
+            result["debug"].append({
+                "step": "first_replay",
+                "replay_keys": list(replays[0].keys()) if isinstance(replays[0], dict) else "not_dict",
+                "replay_preview": str(replays[0])[:500]
+            })
         
         log(f"📊 총 {len(replays)}개의 리플레이 발견")
         
         # 매치 필터링
         all_matches = []
+        filter_debug = {"total_checked": 0, "no_players": 0, "not_matched": 0, "matched": 0, "sample_players": []}
+        
         for replay in replays:
+            filter_debug["total_checked"] += 1
             match = _parse_replay_to_match(replay, user_a, user_b)
             if match:
                 all_matches.append(match)
+                filter_debug["matched"] += 1
+            else:
+                # 왜 매치 안 됐는지 확인
+                players = replay.get("players", [])
+                if len(players) < 2:
+                    filter_debug["no_players"] += 1
+                else:
+                    filter_debug["not_matched"] += 1
+                    # 샘플로 몇 개 저장
+                    if len(filter_debug["sample_players"]) < 3:
+                        filter_debug["sample_players"].append({
+                            "p1": players[0].get("name", "?") if players else "?",
+                            "p2": players[1].get("name", "?") if len(players) > 1 else "?",
+                            "raw": str(players)[:200]
+                        })
+        
+        result["debug"].append({
+            "step": "filter_result",
+            "user_a": user_a,
+            "user_b": user_b,
+            "filter_stats": filter_debug
+        })
         
         log(f"🎮 {user_b}와의 매치: {len(all_matches)}개")
         
