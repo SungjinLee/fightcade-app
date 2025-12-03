@@ -133,10 +133,20 @@ st.markdown("""
     
     /* 입력 필드 */
     .stTextInput > div > div > input {
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid rgba(0, 0, 0, 0.2);
         border-radius: 8px;
-        color: white;
+        color: #000000 !important;
+    }
+    
+    .stTextInput > div > div > input::placeholder {
+        color: #888888;
+    }
+    
+    /* 셀렉트박스 */
+    .stSelectbox > div > div {
+        background: rgba(255, 255, 255, 0.95);
+        color: #000000 !important;
     }
     
     /* TBD 섹션 */

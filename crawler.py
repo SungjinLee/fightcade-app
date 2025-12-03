@@ -1,138 +1,137 @@
 """
-크롤러 모듈 (API 방식 + Cloudflare 우회)
-- Fightcade 공식 API 사용
-- cloudscraper로 Cloudflare 챌린지 우회
+크롤러 모듈 (Selenium Stealth)
+- Selenium + Stealth 모드로 Cloudflare 우회
 - 디버그 모드 지원
 """
 
-import cloudscraper
+import time
+import json
 from typing import List, Dict, Any, Optional
-from config import MAX_PAGES_TO_CRAWL, ROWS_PER_PAGE
+
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+try:
+    from selenium_stealth import stealth
+    STEALTH_AVAILABLE = True
+except ImportError:
+    STEALTH_AVAILABLE = False
+
+try:
+    from webdriver_manager.chrome import ChromeDriverManager
+    from webdriver_manager.core.os_manager import ChromeType
+    WEBDRIVER_MANAGER_AVAILABLE = True
+except ImportError:
+    WEBDRIVER_MANAGER_AVAILABLE = False
+
+from config import MAX_PAGES_TO_CRAWL, ROWS_PER_PAGE, API_BASE_URL
 
 
 # =============================================================================
-# API 설정
-# =============================================================================
-API_BASE_URL = "https://www.fightcade.com/api"
-
-
-# =============================================================================
-# Scraper 생성
+# 브라우저 설정 (Stealth 모드)
 # =============================================================================
 
-def _create_scraper():
-    """Cloudflare 우회 스크래퍼 생성"""
-    scraper = cloudscraper.create_scraper(
-        browser={
-            'browser': 'chrome',
-            'platform': 'windows',
-            'desktop': True
-        }
-    )
-    return scraper
-
-
-# =============================================================================
-# API 호출 함수
-# =============================================================================
-
-def _api_request(endpoint: str, method: str = "GET", data: dict = None) -> Dict[str, Any]:
-    """
-    API 요청 수행 (Cloudflare 우회)
+def _create_stealth_driver() -> webdriver.Chrome:
+    """Selenium Stealth 드라이버 생성"""
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--lang=en-US,en")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    Returns:
-        {"success": bool, "data": Any, "error": str, "debug": dict}
-    """
-    url = f"{API_BASE_URL}/{endpoint}"
+    # 봇 탐지 우회
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    
+    driver = None
     
     try:
-        scraper = _create_scraper()
-        
-        if method == "GET":
-            response = scraper.get(url, timeout=30)
-        else:
-            response = scraper.post(url, json=data, timeout=30)
-        
-        # 디버그 정보
-        debug_info = {
-            "url": url,
-            "status_code": response.status_code,
-            "content_preview": response.text[:500] if response.text else "",
-            "method": method
-        }
-        
-        if response.status_code == 200:
+        if WEBDRIVER_MANAGER_AVAILABLE:
             try:
-                json_data = response.json()
-                return {"success": True, "data": json_data, "debug": debug_info}
-            except Exception as e:
-                return {
-                    "success": False, 
-                    "error": f"JSON 파싱 오류: {str(e)}", 
-                    "data": response.text,
-                    "debug": debug_info
-                }
-        elif response.status_code == 403:
-            return {
-                "success": False, 
-                "error": "Cloudflare 차단됨 (403). cloudscraper로도 우회 실패.",
-                "debug": debug_info
-            }
-        elif response.status_code == 503:
-            return {
-                "success": False,
-                "error": "서버 점검 중 (503)",
-                "debug": debug_info
-            }
+                # Chromium (Linux/Cloud)
+                service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+                driver = webdriver.Chrome(service=service, options=options)
+            except Exception:
+                # 일반 Chrome
+                service = Service(ChromeDriverManager().install())
+                driver = webdriver.Chrome(service=service, options=options)
         else:
-            return {
-                "success": False, 
-                "error": f"API 오류: HTTP {response.status_code}",
-                "debug": debug_info
-            }
+            driver = webdriver.Chrome(options=options)
+    except Exception:
+        # 시스템 크롬 직접 사용
+        options.binary_location = "/usr/bin/chromium"
+        driver = webdriver.Chrome(options=options)
+    
+    # Stealth 모드 적용
+    if STEALTH_AVAILABLE and driver:
+        stealth(driver,
+            languages=["en-US", "en"],
+            vendor="Google Inc.",
+            platform="Win32",
+            webgl_vendor="Intel Inc.",
+            renderer="Intel Iris OpenGL Engine",
+            fix_hairline=True,
+        )
+    
+    # 추가 봇 탐지 우회
+    if driver:
+        driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+            "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    
+    return driver
+
+
+# =============================================================================
+# API 호출 (Selenium으로 Cloudflare 통과 후)
+# =============================================================================
+
+def _call_api_via_selenium(driver: webdriver.Chrome, req_type: str, params: dict) -> Dict[str, Any]:
+    """
+    Selenium으로 페이지 방문 후 API 호출
+    Cloudflare 쿠키를 얻은 상태에서 fetch로 API 호출
+    """
+    try:
+        # API 요청 데이터
+        api_data = {"req": req_type, **params}
+        
+        # JavaScript로 fetch 실행
+        script = f"""
+        return fetch('{API_BASE_URL}/', {{
+            method: 'POST',
+            headers: {{
+                'Content-Type': 'application/json',
+            }},
+            body: JSON.stringify({json.dumps(api_data)})
+        }})
+        .then(response => response.json())
+        .then(data => JSON.stringify(data))
+        .catch(error => JSON.stringify({{error: error.toString()}}));
+        """
+        
+        result = driver.execute_script(script)
+        
+        if result:
+            return {"success": True, "data": json.loads(result)}
+        else:
+            return {"success": False, "error": "Empty response"}
             
-    except cloudscraper.exceptions.CloudflareChallengeError as e:
-        return {
-            "success": False, 
-            "error": f"Cloudflare 챌린지 실패: {str(e)}",
-            "debug": {"url": url, "exception": "CloudflareChallengeError"}
-        }
     except Exception as e:
-        return {
-            "success": False, 
-            "error": f"요청 오류: {str(e)}",
-            "debug": {"url": url, "exception": type(e).__name__}
-        }
-
-
-def get_user_replays(username: str, limit: int = 75, offset: int = 0) -> Dict[str, Any]:
-    """
-    유저의 리플레이 목록 조회
-    
-    API: POST /api/
-    Body: {"req": "searchquarks", "username": "...", "limit": 75, "offset": 0}
-    """
-    data = {
-        "req": "searchquarks",
-        "username": username,
-        "limit": limit,
-        "offset": offset
-    }
-    return _api_request("", method="POST", data=data)
-
-
-def get_user_info(username: str) -> Dict[str, Any]:
-    """
-    유저 정보 조회
-    
-    API: POST /api/
-    Body: {"req": "getuser", "username": "..."}
-    """
-    data = {
-        "req": "getuser",
-        "username": username
-    }
-    return _api_request("", method="POST", data=data)
+        return {"success": False, "error": str(e)}
 
 
 # =============================================================================
@@ -140,9 +139,7 @@ def get_user_info(username: str) -> Dict[str, Any]:
 # =============================================================================
 
 def _parse_replay_to_match(replay: Dict, user_a: str, user_b: str) -> Optional[Dict[str, Any]]:
-    """
-    리플레이 데이터를 매치 데이터로 변환
-    """
+    """리플레이 데이터를 매치 데이터로 변환"""
     try:
         players = replay.get("players", [])
         if len(players) < 2:
@@ -156,12 +153,10 @@ def _parse_replay_to_match(replay: Dict, user_a: str, user_b: str) -> Optional[D
         p1_score = int(p1.get("score", 0))
         p2_score = int(p2.get("score", 0))
         
-        # user_a와 user_b가 모두 포함된 매치만 필터링
         names_lower = {p1_name.lower(), p2_name.lower()}
         if user_a.lower() not in names_lower or user_b.lower() not in names_lower:
             return None
         
-        # 승자 판정
         winner = p1_name if p1_score > p2_score else p2_name
         
         return {
@@ -183,9 +178,8 @@ def _parse_replay_to_match(replay: Dict, user_a: str, user_b: str) -> Optional[D
 def crawl_head_to_head_sync(user_a: str, user_b: str, 
                             max_pages: int = MAX_PAGES_TO_CRAWL,
                             progress_callback=None) -> Dict[str, Any]:
-    """
-    두 유저 간의 대전 기록 조회 (API 방식)
-    """
+    """두 유저 간의 대전 기록 조회 (Selenium Stealth)"""
+    
     result = {
         "success": False,
         "matches": [],
@@ -203,81 +197,116 @@ def crawl_head_to_head_sync(user_a: str, user_b: str,
     def log(msg):
         if progress_callback:
             progress_callback(msg)
-        print(msg)
     
-    total_limit = max_pages * ROWS_PER_PAGE
+    driver = None
     
-    log(f"📡 {user_a}의 리플레이 데이터 조회 중... (cloudscraper 사용)")
-    
-    # API 호출
-    api_result = get_user_replays(user_a, limit=total_limit, offset=0)
-    
-    # 디버그 정보 저장
-    result["debug"].append({
-        "step": "get_user_replays",
-        "user": user_a,
-        "result": api_result.get("debug", {})
-    })
-    
-    if not api_result["success"]:
-        result["error"] = api_result["error"]
-        log(f"❌ API 오류: {api_result['error']}")
-        return result
-    
-    # 리플레이 데이터 파싱
-    replays_data = api_result.get("data", {})
-    
-    # 응답 구조 확인
-    if isinstance(replays_data, dict):
-        replays = replays_data.get("results", replays_data.get("replays", replays_data.get("res", [])))
-        if not replays and "qupiresults" in str(replays_data):
-            replays = replays_data.get("results", {}).get("results", [])
-    elif isinstance(replays_data, list):
-        replays = replays_data
-    else:
-        result["error"] = f"예상치 못한 응답 형식: {type(replays_data)}"
-        result["debug"].append({"response_type": str(type(replays_data)), "preview": str(replays_data)[:500]})
-        return result
-    
-    log(f"📊 총 {len(replays)}개의 리플레이 발견")
-    
-    # user_b와의 매치만 필터링
-    all_matches = []
-    for replay in replays:
-        match = _parse_replay_to_match(replay, user_a, user_b)
-        if match:
-            all_matches.append(match)
-    
-    log(f"🎮 {user_b}와의 매치: {len(all_matches)}개")
-    
-    if not all_matches:
-        result["error"] = f"'{user_a}'와 '{user_b}' 간의 대전 기록이 없습니다."
+    try:
+        log("🌐 Stealth 브라우저 시작 중...")
+        result["debug"].append({"step": "init", "stealth_available": STEALTH_AVAILABLE})
+        
+        driver = _create_stealth_driver()
+        driver.set_page_load_timeout(60)
+        
+        # 먼저 메인 페이지 방문 (Cloudflare 쿠키 획득)
+        log("🔐 Cloudflare 인증 중...")
+        driver.get("https://www.fightcade.com/")
+        
+        # Cloudflare 챌린지 대기 (최대 15초)
+        time.sleep(5)
+        
+        # 페이지 로드 확인
+        page_source = driver.page_source
+        if "Just a moment" in page_source:
+            log("⏳ Cloudflare 챌린지 처리 중... (최대 15초)")
+            time.sleep(10)
+            page_source = driver.page_source
+        
+        result["debug"].append({
+            "step": "cloudflare_check",
+            "passed": "Just a moment" not in page_source,
+            "title": driver.title
+        })
+        
+        if "Just a moment" in page_source:
+            result["error"] = "Cloudflare 챌린지 통과 실패"
+            return result
+        
+        log(f"✅ Cloudflare 통과! {user_a}의 데이터 조회 중...")
+        
+        # API 호출
+        total_limit = max_pages * ROWS_PER_PAGE
+        api_result = _call_api_via_selenium(driver, "searchquarks", {
+            "username": user_a,
+            "limit": total_limit,
+            "offset": 0
+        })
+        
+        result["debug"].append({
+            "step": "api_call",
+            "success": api_result.get("success"),
+            "has_data": "data" in api_result
+        })
+        
+        if not api_result["success"]:
+            result["error"] = f"API 호출 실패: {api_result.get('error', 'Unknown')}"
+            return result
+        
+        # 데이터 파싱
+        data = api_result.get("data", {})
+        replays = data.get("results", data.get("res", []))
+        
+        if isinstance(replays, dict):
+            replays = replays.get("results", [])
+        
+        log(f"📊 총 {len(replays)}개의 리플레이 발견")
+        
+        # 매치 필터링
+        all_matches = []
+        for replay in replays:
+            match = _parse_replay_to_match(replay, user_a, user_b)
+            if match:
+                all_matches.append(match)
+        
+        log(f"🎮 {user_b}와의 매치: {len(all_matches)}개")
+        
+        if not all_matches:
+            result["error"] = f"'{user_a}'와 '{user_b}' 간의 대전 기록이 없습니다."
+            result["success"] = True
+            return result
+        
+        # 결과 집계
+        user_a_wins = sum(1 for m in all_matches if m["winner"].lower() == user_a.lower())
+        user_b_wins = sum(1 for m in all_matches if m["winner"].lower() == user_b.lower())
+        
         result["success"] = True
-        return result
+        result["matches"] = all_matches
+        result["summary"] = {
+            "total_matches": len(all_matches),
+            "user_a_wins": user_a_wins,
+            "user_b_wins": user_b_wins,
+            "user_a_id": user_a,
+            "user_b_id": user_b
+        }
+        
+        log(f"✅ 완료! {user_a}: {user_a_wins}승, {user_b}: {user_b_wins}승")
+        
+    except Exception as e:
+        result["error"] = f"오류: {str(e)}"
+        result["debug"].append({"step": "exception", "error": str(e)})
     
-    # 결과 집계
-    user_a_wins = sum(1 for m in all_matches if m["winner"].lower() == user_a.lower())
-    user_b_wins = sum(1 for m in all_matches if m["winner"].lower() == user_b.lower())
-    
-    result["success"] = True
-    result["matches"] = all_matches
-    result["summary"] = {
-        "total_matches": len(all_matches),
-        "user_a_wins": user_a_wins,
-        "user_b_wins": user_b_wins,
-        "user_a_id": user_a,
-        "user_b_id": user_b
-    }
-    
-    log(f"✅ 완료! 총 {len(all_matches)}경기")
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
     
     return result
 
 
 def check_user_exists_sync(user_id: str) -> bool:
     """유저 존재 여부 확인"""
-    result = get_user_info(user_id)
-    return result.get("success", False)
+    return True  # 간소화
 
 
 # =============================================================================
@@ -285,32 +314,44 @@ def check_user_exists_sync(user_id: str) -> bool:
 # =============================================================================
 
 def test_api_connection() -> Dict[str, Any]:
-    """API 연결 테스트"""
-    results = {}
+    """API 연결 테스트 (Selenium Stealth)"""
+    results = {
+        "stealth_available": STEALTH_AVAILABLE,
+        "webdriver_manager": WEBDRIVER_MANAGER_AVAILABLE
+    }
     
+    driver = None
     try:
-        scraper = _create_scraper()
+        driver = _create_stealth_driver()
+        driver.set_page_load_timeout(30)
         
-        # 테스트 1: 메인 사이트
-        response = scraper.get("https://www.fightcade.com/", timeout=10)
+        # 메인 사이트 테스트
+        driver.get("https://www.fightcade.com/")
+        time.sleep(5)
+        
+        page_source = driver.page_source
         results["main_site"] = {
-            "status": response.status_code,
-            "ok": response.status_code == 200
+            "title": driver.title,
+            "cloudflare_challenge": "Just a moment" in page_source,
+            "passed": "Just a moment" not in page_source
         }
         
-        # 테스트 2: API
-        response = scraper.post(
-            f"{API_BASE_URL}/",
-            json={"req": "getuser", "username": "test"},
-            timeout=10
-        )
-        results["api"] = {
-            "status": response.status_code,
-            "response_preview": response.text[:300],
-            "ok": response.status_code == 200
-        }
+        if "Just a moment" not in page_source:
+            # API 테스트
+            api_result = _call_api_via_selenium(driver, "getuser", {"username": "test"})
+            results["api"] = {
+                "success": api_result.get("success"),
+                "has_data": "data" in api_result
+            }
         
     except Exception as e:
         results["error"] = str(e)
+    
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
     
     return results
