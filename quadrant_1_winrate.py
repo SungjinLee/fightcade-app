@@ -211,8 +211,8 @@ def create_result_image(summary: HeadToHeadSummary) -> Optional[bytes]:
     # 승자 표시
     a_color = green if summary.winner == summary.player_a else red
     b_color = green if summary.winner == summary.player_b else red
-    a_prefix = "👑 " if summary.winner == summary.player_a else ""
-    b_prefix = "👑 " if summary.winner == summary.player_b else ""
+    a_prefix = "* " if summary.winner == summary.player_a else ""
+    b_prefix = "* " if summary.winner == summary.player_b else ""
     
     # 타이틀
     title = f"TOTAL {summary.total_games} GAMES / {summary.total_rounds} ROUNDS"

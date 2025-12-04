@@ -56,7 +56,7 @@ def create_ranking_image(ranking_data: list) -> bytes:
     green = (78, 204, 163)
     
     # 헤더
-    draw.text((width // 2, 25), "🏆 RANKING", fill=gold, font=font_title, anchor="mm")
+    draw.text((width // 2, 25), "RANKING", fill=gold, font=font_title, anchor="mm")
     
     # 구분선
     draw.line([(20, header_height - 5), (width - 20, header_height - 5)], fill=(50, 50, 70), width=2)
@@ -74,19 +74,15 @@ def create_ranking_image(ranking_data: list) -> bytes:
         # 순위 색상
         if rank == 1:
             rank_color = gold
-            medal = "🥇"
         elif rank == 2:
             rank_color = silver
-            medal = "🥈"
         elif rank == 3:
             rank_color = bronze
-            medal = "🥉"
         else:
             rank_color = white
-            medal = f"{rank}."
         
-        # 순위
-        draw.text((35, y), medal, fill=rank_color, font=font_row, anchor="mm")
+        # 순위 (숫자)
+        draw.text((35, y), f"{rank}.", fill=rank_color, font=font_row, anchor="mm")
         
         # 유저 ID
         draw.text((100, y), user_id[:15], fill=white, font=font_row, anchor="lm")
