@@ -11,6 +11,7 @@ import base64
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -258,17 +259,18 @@ def render_quadrant_1():
     
     st.markdown('<p class="section-title">⚔️ 승률 조회</p>', unsafe_allow_html=True)
     
-    st.markdown("""
-    <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6); margin-bottom: 1rem;">
-        Fightcade 리플레이 목록을 복사하여 아래에 붙여넣기 하세요.
-    </p>
-    """, unsafe_allow_html=True)
+    # 상단: 결과 이미지 표시
+    _display_result_image()
     
-    # 텍스트 입력 영역
+    # 구분선
+    st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 0.5rem 0;'>", 
+                unsafe_allow_html=True)
+    
+    # 하단: 텍스트 입력 영역 (높이 낮게)
     replay_text = st.text_area(
         "리플레이 데이터",
-        height=150,
-        placeholder="Fightcade 리플레이 화면에서 복사한 텍스트를 여기에 붙여넣기...",
+        height=80,
+        placeholder="Fightcade 리플레이 텍스트 붙여넣기...",
         key="replay_text_input",
         label_visibility="collapsed"
     )
@@ -287,12 +289,9 @@ def render_quadrant_1():
                 # 이미지 생성
                 img_bytes = create_result_image(summary)
                 st.session_state.result_image = img_bytes
-                st.success("✅ 파싱 완료!")
+                st.rerun()
         else:
             st.warning("텍스트를 입력해주세요.")
-    
-    # 결과 표시
-    _display_result_image()
 
 
 def _display_result_image():
@@ -303,9 +302,9 @@ def _display_result_image():
     
     if not summary or not img_bytes:
         st.markdown("""
-        <div style="text-align: center; padding: 2rem; color: rgba(255,255,255,0.5);">
-            <p style="font-size: 3rem;">📋</p>
-            <p>리플레이 데이터를 붙여넣고<br>승률 추출 버튼을 눌러주세요</p>
+        <div style="text-align: center; padding: 1.5rem; color: rgba(255,255,255,0.5);">
+            <p style="font-size: 2.5rem; margin: 0;">📋</p>
+            <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem;">리플레이 데이터를 붙여넣고<br>승률 추출 버튼을 눌러주세요</p>
         </div>
         """, unsafe_allow_html=True)
         return
@@ -313,73 +312,131 @@ def _display_result_image():
     # 이미지를 base64로 인코딩
     img_b64 = base64.b64encode(img_bytes).decode()
     
-    # 이미지 + 복사 버튼 컨테이너
-    st.markdown(f"""
-    <div style="position: relative; display: inline-block; width: 100%;">
-        <!-- 복사 버튼 (우상단) -->
-        <button id="copyBtn" onclick="copyImageToClipboard()" 
-                style="position: absolute; top: 10px; right: 10px; z-index: 100;
-                       background: linear-gradient(135deg, #e94560, #0f3460);
-                       color: white; border: none; border-radius: 8px;
-                       padding: 8px 16px; cursor: pointer; font-weight: 600;
-                       box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-                       transition: all 0.3s;">
-            📋 이미지 복사
-        </button>
+    # st.image로 이미지 표시 + 복사/다운로드 버튼
+    col1, col2 = st.columns([3, 1])
+    
+    with col2:
+        # 다운로드 버튼
+        st.download_button(
+            label="💾 저장",
+            data=img_bytes,
+            file_name=f"winrate_{summary.player_a}_vs_{summary.player_b}.png",
+            mime="image/png",
+            use_container_width=True
+        )
+    
+    # 이미지와 복사 버튼을 HTML 컴포넌트로 표시
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{
+                margin: 0;
+                padding: 0;
+                background: transparent;
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            }}
+            .container {{
+                position: relative;
+                display: inline-block;
+                width: 100%;
+            }}
+            .result-image {{
+                width: 100%;
+                max-width: 100%;
+                border-radius: 12px;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+                display: block;
+            }}
+            .copy-btn {{
+                position: absolute;
+                top: 8px;
+                right: 8px;
+                background: linear-gradient(135deg, #e94560, #0f3460);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 14px;
+                cursor: pointer;
+                font-weight: 600;
+                font-size: 13px;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                transition: all 0.3s;
+                z-index: 10;
+            }}
+            .copy-btn:hover {{
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(233, 69, 96, 0.4);
+            }}
+            .copy-btn.success {{
+                background: #4ecca3;
+            }}
+            .toast {{
+                position: absolute;
+                bottom: 10px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(78, 204, 163, 0.95);
+                color: white;
+                padding: 8px 16px;
+                border-radius: 20px;
+                font-size: 13px;
+                font-weight: 600;
+                opacity: 0;
+                transition: opacity 0.3s;
+                z-index: 10;
+            }}
+            .toast.show {{
+                opacity: 1;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <img id="resultImg" class="result-image" src="data:image/png;base64,{img_b64}" />
+            <button id="copyBtn" class="copy-btn" onclick="copyImage()">📋 복사</button>
+            <div id="toast" class="toast">✅ 클립보드에 복사됨!</div>
+        </div>
         
-        <!-- 결과 이미지 -->
-        <img id="resultImage" src="data:image/png;base64,{img_b64}" 
-             style="width: 100%; max-width: 600px; border-radius: 12px; 
-                    box-shadow: 0 8px 32px rgba(0,0,0,0.4); display: block; margin: 0 auto;">
-    </div>
+        <script>
+            async function copyImage() {{
+                const btn = document.getElementById('copyBtn');
+                const toast = document.getElementById('toast');
+                
+                try {{
+                    const img = document.getElementById('resultImg');
+                    const response = await fetch(img.src);
+                    const blob = await response.blob();
+                    
+                    await navigator.clipboard.write([
+                        new ClipboardItem({{ 'image/png': blob }})
+                    ]);
+                    
+                    // 성공 표시
+                    btn.innerHTML = '✅ 완료!';
+                    btn.classList.add('success');
+                    toast.classList.add('show');
+                    
+                    setTimeout(() => {{
+                        btn.innerHTML = '📋 복사';
+                        btn.classList.remove('success');
+                        toast.classList.remove('show');
+                    }}, 2000);
+                    
+                }} catch (err) {{
+                    // 실패 시 안내
+                    btn.innerHTML = '❌ 실패';
+                    setTimeout(() => {{
+                        btn.innerHTML = '📋 복사';
+                        alert('클립보드 접근이 제한되었습니다.\\n이미지를 우클릭하여 복사하거나\\n저장 버튼을 이용해주세요.');
+                    }}, 500);
+                }}
+            }}
+        </script>
+    </body>
+    </html>
+    """
     
-    <!-- 복사 완료 메시지 -->
-    <div id="copyMessage" style="display: none; text-align: center; margin-top: 10px;
-                                  color: #4ecca3; font-weight: 600;">
-        ✅ 클립보드에 복사되었습니다!
-    </div>
-    
-    <script>
-    async function copyImageToClipboard() {{
-        try {{
-            const img = document.getElementById('resultImage');
-            const response = await fetch(img.src);
-            const blob = await response.blob();
-            
-            await navigator.clipboard.write([
-                new ClipboardItem({{
-                    'image/png': blob
-                }})
-            ]);
-            
-            // 복사 완료 표시
-            const btn = document.getElementById('copyBtn');
-            const msg = document.getElementById('copyMessage');
-            
-            btn.innerHTML = '✅ 복사 완료!';
-            btn.style.background = '#4ecca3';
-            msg.style.display = 'block';
-            
-            setTimeout(() => {{
-                btn.innerHTML = '📋 이미지 복사';
-                btn.style.background = 'linear-gradient(135deg, #e94560, #0f3460)';
-                msg.style.display = 'none';
-            }}, 2000);
-            
-        }} catch (err) {{
-            // Clipboard API 실패 시 대체 방법 안내
-            alert('브라우저에서 클립보드 접근이 제한되었습니다.\\n이미지를 우클릭하여 복사해주세요.');
-            console.error('Copy failed:', err);
-        }}
-    }}
-    </script>
-    """, unsafe_allow_html=True)
-    
-    # 다운로드 버튼 (백업용)
-    st.download_button(
-        label="💾 이미지 다운로드",
-        data=img_bytes,
-        file_name=f"winrate_{summary.player_a}_vs_{summary.player_b}.png",
-        mime="image/png",
-        use_container_width=True
-    )
+    # HTML 컴포넌트로 렌더링 (높이 조절)
+    components.html(html_content, height=220, scrolling=False)
