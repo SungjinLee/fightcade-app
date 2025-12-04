@@ -2,7 +2,7 @@
 3사분면: User ID 리스트 관리
 - Add/Delete 버튼으로 유저 관리
 - 검색 기능
-- 검색 시 하이라이트 + 1사분면 자동 입력
+- 유저 ID 클립보드 복사 지원
 """
 
 import streamlit as st
@@ -54,17 +54,7 @@ def _render_search_section():
         
         if found_user:
             st.session_state.highlighted_user = found_user
-            # 1사분면에 자동 입력 (user_a에 입력)
-            if not st.session_state.get("user_a_input"):
-                st.session_state.user_a_input = found_user
-            elif not st.session_state.get("user_b_input"):
-                st.session_state.user_b_input = found_user
-            else:
-                # 둘 다 차있으면 user_a를 교체
-                st.session_state.user_a_input = found_user
-            
-            st.success(f"✅ '{found_user}' 발견! 1사분면에 입력됨")
-            st.rerun()
+            st.success(f"✅ '{found_user}' 발견!")
         else:
             st.session_state.highlighted_user = None
             st.warning(f"❌ '{search_query}'를 찾을 수 없습니다.")
@@ -139,44 +129,30 @@ def _render_user_list():
     </p>
     """, unsafe_allow_html=True)
     
-    # 스크롤 가능한 리스트 영역
-    list_container = st.container()
-    
-    with list_container:
-        for user_id in user_list:
-            is_highlighted = highlighted and user_id.lower() == highlighted.lower()
-            
-            # 스타일 결정
-            if is_highlighted:
-                bg_color = "rgba(78, 204, 163, 0.2)"
-                border = "1px solid #4ecca3"
-                icon = "✅"
-            else:
-                bg_color = "rgba(255, 255, 255, 0.03)"
-                border = "1px solid transparent"
-                icon = ""
-            
-            # 클릭 가능한 유저 아이템
-            col1, col2, col3 = st.columns([1, 6, 1])
-            
-            with col1:
-                if st.button("👆", key=f"select_a_{user_id}", help=f"User A에 입력"):
-                    st.session_state.user_a_input = user_id
-                    st.session_state.highlighted_user = user_id
-                    st.rerun()
-            
-            with col2:
-                st.markdown(f"""
-                <div style="padding: 0.5rem 1rem; background: {bg_color}; 
-                            border: {border}; border-radius: 6px; margin: 0.2rem 0;">
-                    <span style="color: white;">{icon} {user_id}</span>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            with col3:
-                if st.button("👆", key=f"select_b_{user_id}", help=f"User B에 입력"):
-                    st.session_state.user_b_input = user_id
-                    st.rerun()
+    # 유저 리스트 표시
+    for user_id in user_list:
+        is_highlighted = highlighted and user_id.lower() == highlighted.lower()
+        
+        # 스타일 결정
+        if is_highlighted:
+            bg_color = "rgba(78, 204, 163, 0.2)"
+            border = "1px solid #4ecca3"
+            icon = "✅ "
+        else:
+            bg_color = "rgba(255, 255, 255, 0.03)"
+            border = "1px solid transparent"
+            icon = ""
+        
+        st.markdown(f"""
+        <div style="padding: 0.6rem 1rem; background: {bg_color}; 
+                    border: {border}; border-radius: 6px; margin: 0.3rem 0;
+                    display: flex; justify-content: space-between; align-items: center;">
+            <span style="color: white; font-size: 0.95rem;">{icon}{user_id}</span>
+            <span style="color: rgba(255,255,255,0.3); font-size: 0.75rem;">
+                Fightcade 검색용
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 def highlight_user(user_id: str):

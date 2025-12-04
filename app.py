@@ -1,7 +1,7 @@
 """
 Fightcade 승률 분석기 - 메인 앱
 4분면 레이아웃:
-- 1사분면: 두 유저 승률 조회
+- 1사분면: 텍스트 파싱 기반 승률 조회
 - 2사분면: 랭킹 시스템
 - 3사분면: User ID 리스트 관리
 - 4사분면: TBD (예약)
@@ -143,6 +143,16 @@ st.markdown("""
         color: #888888;
     }
     
+    /* 텍스트 에어리어 */
+    .stTextArea > div > div > textarea {
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid rgba(0, 0, 0, 0.2);
+        border-radius: 8px;
+        color: #000000 !important;
+        font-family: 'Consolas', 'Monaco', monospace;
+        font-size: 0.85rem;
+    }
+    
     /* 셀렉트박스 */
     .stSelectbox > div > div {
         background: rgba(255, 255, 255, 0.95);
@@ -178,10 +188,6 @@ st.markdown("""
 # =============================================================================
 # 세션 상태 초기화
 # =============================================================================
-if "user_a_input" not in st.session_state:
-    st.session_state.user_a_input = ""
-if "user_b_input" not in st.session_state:
-    st.session_state.user_b_input = ""
 if "search_result" not in st.session_state:
     st.session_state.search_result = None
 if "highlighted_user" not in st.session_state:
@@ -200,7 +206,7 @@ from quadrant_4_tbd import render_quadrant_4
 # =============================================================================
 st.markdown(f"<h1 style='text-align: center; color: #e94560;'>{PAGE_ICON} {PAGE_TITLE}</h1>", 
             unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: rgba(255,255,255,0.6);'>Fightcade 대전 기록 분석 및 랭킹 시스템</p>", 
+st.markdown("<p style='text-align: center; color: rgba(255,255,255,0.6);'>Fightcade 대전 기록 분석 (텍스트 파싱 방식)</p>", 
             unsafe_allow_html=True)
 
 st.markdown("---")
@@ -239,7 +245,7 @@ with bottom_right:
 st.markdown("---")
 st.markdown(
     "<p style='text-align: center; color: rgba(255,255,255,0.3); font-size: 0.8rem;'>"
-    "Fightcade 승률 분석기 v1.0 | Data from fightcade.com"
+    "Fightcade 승률 분석기 v2.0 | 텍스트 파싱 방식"
     "</p>",
     unsafe_allow_html=True
 )
