@@ -2,13 +2,21 @@
 1사분면: 텍스트 파싱 기반 승률 조회
 - Fightcade 리플레이 목록 텍스트 붙여넣기
 - 자동으로 유저 ID 추출 및 승률 계산
-- Fancy한 결과 표시
+- 이미지로 결과 생성 + 클립보드 복사
 """
 
 import re
+import io
+import base64
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 import streamlit as st
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 
 # =============================================================================
@@ -24,7 +32,7 @@ class MatchResult:
     player2: str
     score2: int
     winner: str
-    match_type: str  # FT3, FT5 등
+    match_type: str
 
 
 @dataclass
@@ -42,15 +50,7 @@ class HeadToHeadSummary:
 # 텍스트 파싱 로직
 # =============================================================================
 def parse_replay_text(raw_text: str) -> Tuple[Optional[HeadToHeadSummary], Optional[str]]:
-    """
-    Fightcade 리플레이 텍스트를 파싱하여 승률 정보 추출
-    
-    Args:
-        raw_text: 붙여넣은 리플레이 텍스트
-    
-    Returns:
-        (HeadToHeadSummary 또는 None, 에러 메시지 또는 None)
-    """
+    """Fightcade 리플레이 텍스트를 파싱하여 승률 정보 추출"""
     if not raw_text or not raw_text.strip():
         return None, "텍스트를 입력해주세요."
     
@@ -62,12 +62,10 @@ def parse_replay_text(raw_text: str) -> Tuple[Optional[HeadToHeadSummary], Optio
     matches: List[MatchResult] = []
     all_players: set = set()
     
-    # 날짜 패턴으로 경기 시작점 찾기
     date_pattern = re.compile(r'^\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.')
     
     i = 0
     while i < len(lines):
-        # 날짜 라인 찾기
         if date_pattern.match(lines[i]):
             try:
                 match_data = _parse_single_match(lines, i)
@@ -75,7 +73,7 @@ def parse_replay_text(raw_text: str) -> Tuple[Optional[HeadToHeadSummary], Optio
                     matches.append(match_data)
                     all_players.add(match_data.player1.lower())
                     all_players.add(match_data.player2.lower())
-                    i += 9  # 다음 경기로
+                    i += 9
                     continue
             except (IndexError, ValueError):
                 pass
@@ -84,21 +82,15 @@ def parse_replay_text(raw_text: str) -> Tuple[Optional[HeadToHeadSummary], Optio
     if not matches:
         return None, "경기 데이터를 파싱할 수 없습니다. 올바른 형식인지 확인해주세요."
     
-    # 유저가 정확히 2명인지 확인
     unique_players = list(all_players)
     if len(unique_players) != 2:
         player_list = ", ".join(sorted(all_players))
         return None, f"정확히 2명의 유저 데이터가 필요합니다. 감지된 유저: {player_list}"
     
-    # 원본 대소문자 유지를 위해 첫 등장 기준으로 이름 찾기
     player_a_original = _find_original_case(matches, unique_players[0])
     player_b_original = _find_original_case(matches, unique_players[1])
     
-    # 승리 횟수 계산
-    player_a_wins = sum(
-        1 for m in matches 
-        if m.winner.lower() == unique_players[0]
-    )
+    player_a_wins = sum(1 for m in matches if m.winner.lower() == unique_players[0])
     player_b_wins = len(matches) - player_a_wins
     
     summary = HeadToHeadSummary(
@@ -114,26 +106,11 @@ def parse_replay_text(raw_text: str) -> Tuple[Optional[HeadToHeadSummary], Optio
 
 
 def _parse_single_match(lines: List[str], start_idx: int) -> Optional[MatchResult]:
-    """
-    단일 경기 파싱
-    
-    예상 구조 (start_idx부터):
-    [0] 날짜/시간: 2025. 12. 3. 오후 11:51:07
-    [1] 게임 + 유저1: kof98	testgame38
-    [2] 유저1 점수: 3
-    [3] 매치타입: FT3
-    [4] 유저2 점수: 1
-    [5] 유저2: wowjin
-    [6] 경기시간: 00:11:22
-    [7] 기타1: 0
-    [8] 기타2: 0
-    """
+    """단일 경기 파싱"""
     if start_idx + 8 >= len(lines):
         return None
     
     date_str = lines[start_idx]
-    
-    # 게임명 + 유저1 (탭으로 구분)
     game_player1_line = lines[start_idx + 1]
     parts = re.split(r'\t+', game_player1_line)
     
@@ -141,7 +118,6 @@ def _parse_single_match(lines: List[str], start_idx: int) -> Optional[MatchResul
         game = parts[0].strip()
         player1 = parts[1].strip()
     else:
-        # 탭이 없으면 공백으로 분리 시도
         parts = game_player1_line.split()
         if len(parts) >= 2:
             game = parts[0]
@@ -149,29 +125,19 @@ def _parse_single_match(lines: List[str], start_idx: int) -> Optional[MatchResul
         else:
             return None
     
-    # 점수들
     try:
         score1 = int(lines[start_idx + 2])
-        match_type = lines[start_idx + 3]  # FT3, FT5 등
+        match_type = lines[start_idx + 3]
         score2 = int(lines[start_idx + 4])
     except ValueError:
         return None
     
-    # 유저2
     player2 = lines[start_idx + 5].strip()
-    
-    # 승자 결정
     winner = player1 if score1 > score2 else player2
     
     return MatchResult(
-        date=date_str,
-        game=game,
-        player1=player1,
-        score1=score1,
-        player2=player2,
-        score2=score2,
-        winner=winner,
-        match_type=match_type
+        date=date_str, game=game, player1=player1, score1=score1,
+        player2=player2, score2=score2, winner=winner, match_type=match_type
     )
 
 
@@ -183,6 +149,105 @@ def _find_original_case(matches: List[MatchResult], player_lower: str) -> str:
         if match.player2.lower() == player_lower:
             return match.player2
     return player_lower
+
+
+# =============================================================================
+# 이미지 생성
+# =============================================================================
+def create_result_image(summary: HeadToHeadSummary) -> Optional[bytes]:
+    """승률 결과 이미지 생성"""
+    if not PIL_AVAILABLE:
+        return None
+    
+    # 이미지 크기 및 색상 설정
+    width, height = 600, 320
+    bg_color = (26, 26, 46)  # 다크 블루
+    
+    img = Image.new('RGB', (width, height), bg_color)
+    draw = ImageDraw.Draw(img)
+    
+    # 폰트 설정 (시스템 기본 폰트 사용)
+    try:
+        font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+        font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+    except:
+        font_large = ImageFont.load_default()
+        font_medium = ImageFont.load_default()
+        font_small = ImageFont.load_default()
+    
+    # 색상 정의
+    green = (78, 204, 163)      # Player A 색상
+    red = (255, 107, 107)       # Player B 색상
+    gold = (255, 211, 105)      # 강조 색상
+    white = (255, 255, 255)
+    gray = (150, 150, 150)
+    
+    # 승률 계산
+    a_rate = (summary.player_a_wins / summary.total_matches) * 100
+    b_rate = (summary.player_b_wins / summary.total_matches) * 100
+    
+    # 승자 표시
+    a_crown = "[WIN] " if summary.player_a_wins > summary.player_b_wins else ""
+    b_crown = "[WIN] " if summary.player_b_wins > summary.player_a_wins else ""
+    
+    # 타이틀 (총 경기 수)
+    title = f"TOTAL {summary.total_matches} GAMES"
+    draw.text((width // 2, 30), title, fill=gold, font=font_small, anchor="mm")
+    
+    # 중앙 VS
+    draw.text((width // 2, 160), "VS", fill=gold, font=font_medium, anchor="mm")
+    
+    # Player A (왼쪽)
+    a_name = f"{a_crown}{summary.player_a}"
+    draw.text((150, 80), a_name, fill=green, font=font_small, anchor="mm")
+    draw.text((150, 140), str(summary.player_a_wins), fill=green, font=font_large, anchor="mm")
+    draw.text((150, 200), f"{a_rate:.1f}%", fill=green, font=font_medium, anchor="mm")
+    
+    # Player B (오른쪽)
+    b_name = f"{b_crown}{summary.player_b}"
+    draw.text((450, 80), b_name, fill=red, font=font_small, anchor="mm")
+    draw.text((450, 140), str(summary.player_b_wins), fill=red, font=font_large, anchor="mm")
+    draw.text((450, 200), f"{b_rate:.1f}%", fill=red, font=font_medium, anchor="mm")
+    
+    # 승률 바
+    bar_y = 250
+    bar_height = 25
+    bar_margin = 50
+    bar_width = width - (bar_margin * 2)
+    
+    # 바 배경
+    draw.rounded_rectangle(
+        [bar_margin, bar_y, width - bar_margin, bar_y + bar_height],
+        radius=12, fill=(50, 50, 70)
+    )
+    
+    # Player A 바
+    a_bar_width = int(bar_width * (a_rate / 100))
+    if a_bar_width > 0:
+        draw.rounded_rectangle(
+            [bar_margin, bar_y, bar_margin + a_bar_width, bar_y + bar_height],
+            radius=12, fill=green
+        )
+    
+    # Player B 바 (오른쪽에서 시작)
+    b_bar_width = int(bar_width * (b_rate / 100))
+    if b_bar_width > 0:
+        draw.rounded_rectangle(
+            [width - bar_margin - b_bar_width, bar_y, width - bar_margin, bar_y + bar_height],
+            radius=12, fill=red
+        )
+    
+    # 푸터
+    footer = "Fightcade Win Rate Analyzer"
+    draw.text((width // 2, height - 20), footer, fill=gray, font=font_small, anchor="mm")
+    
+    # 바이트로 변환
+    img_bytes = io.BytesIO()
+    img.save(img_bytes, format='PNG')
+    img_bytes.seek(0)
+    
+    return img_bytes.getvalue()
 
 
 # =============================================================================
@@ -202,7 +267,7 @@ def render_quadrant_1():
     # 텍스트 입력 영역
     replay_text = st.text_area(
         "리플레이 데이터",
-        height=200,
+        height=150,
         placeholder="Fightcade 리플레이 화면에서 복사한 텍스트를 여기에 붙여넣기...",
         key="replay_text_input",
         label_visibility="collapsed"
@@ -216,22 +281,27 @@ def render_quadrant_1():
             if error:
                 st.error(f"❌ {error}")
                 st.session_state.search_result = None
+                st.session_state.result_image = None
             else:
                 st.session_state.search_result = summary
+                # 이미지 생성
+                img_bytes = create_result_image(summary)
+                st.session_state.result_image = img_bytes
                 st.success("✅ 파싱 완료!")
         else:
             st.warning("텍스트를 입력해주세요.")
     
     # 결과 표시
-    _display_fancy_result()
+    _display_result_image()
 
 
-def _display_fancy_result():
-    """Fancy한 승률 결과 표시"""
+def _display_result_image():
+    """이미지 결과 표시 + 클립보드 복사 버튼"""
     
-    summary: Optional[HeadToHeadSummary] = st.session_state.get("search_result")
+    summary = st.session_state.get("search_result")
+    img_bytes = st.session_state.get("result_image")
     
-    if not summary:
+    if not summary or not img_bytes:
         st.markdown("""
         <div style="text-align: center; padding: 2rem; color: rgba(255,255,255,0.5);">
             <p style="font-size: 3rem;">📋</p>
@@ -240,140 +310,76 @@ def _display_fancy_result():
         """, unsafe_allow_html=True)
         return
     
-    total = summary.total_matches
-    a_wins = summary.player_a_wins
-    b_wins = summary.player_b_wins
-    player_a = summary.player_a
-    player_b = summary.player_b
+    # 이미지를 base64로 인코딩
+    img_b64 = base64.b64encode(img_bytes).decode()
     
-    # 승률 계산
-    a_rate = (a_wins / total) * 100 if total > 0 else 0
-    b_rate = (b_wins / total) * 100 if total > 0 else 0
-    
-    # 승자 하이라이트 결정
-    if a_wins > b_wins:
-        a_glow = "box-shadow: 0 0 20px rgba(78, 204, 163, 0.5);"
-        b_glow = ""
-        a_crown = "👑 "
-        b_crown = ""
-    elif b_wins > a_wins:
-        a_glow = ""
-        b_glow = "box-shadow: 0 0 20px rgba(255, 107, 107, 0.5);"
-        a_crown = ""
-        b_crown = "👑 "
-    else:
-        a_glow = ""
-        b_glow = ""
-        a_crown = ""
-        b_crown = ""
-    
-    # 총 경기수 표시
+    # 이미지 + 복사 버튼 컨테이너
     st.markdown(f"""
-    <div style="text-align: center; margin: 1.5rem 0;">
-        <span style="background: rgba(255, 211, 105, 0.2); padding: 0.5rem 1.5rem; 
-                     border-radius: 20px; font-size: 1.1rem; color: #ffd369;">
-            ⚔️ 총 {total}전
-        </span>
+    <div style="position: relative; display: inline-block; width: 100%;">
+        <!-- 복사 버튼 (우상단) -->
+        <button id="copyBtn" onclick="copyImageToClipboard()" 
+                style="position: absolute; top: 10px; right: 10px; z-index: 100;
+                       background: linear-gradient(135deg, #e94560, #0f3460);
+                       color: white; border: none; border-radius: 8px;
+                       padding: 8px 16px; cursor: pointer; font-weight: 600;
+                       box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                       transition: all 0.3s;">
+            📋 이미지 복사
+        </button>
+        
+        <!-- 결과 이미지 -->
+        <img id="resultImage" src="data:image/png;base64,{img_b64}" 
+             style="width: 100%; max-width: 600px; border-radius: 12px; 
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.4); display: block; margin: 0 auto;">
     </div>
+    
+    <!-- 복사 완료 메시지 -->
+    <div id="copyMessage" style="display: none; text-align: center; margin-top: 10px;
+                                  color: #4ecca3; font-weight: 600;">
+        ✅ 클립보드에 복사되었습니다!
+    </div>
+    
+    <script>
+    async function copyImageToClipboard() {{
+        try {{
+            const img = document.getElementById('resultImage');
+            const response = await fetch(img.src);
+            const blob = await response.blob();
+            
+            await navigator.clipboard.write([
+                new ClipboardItem({{
+                    'image/png': blob
+                }})
+            ]);
+            
+            // 복사 완료 표시
+            const btn = document.getElementById('copyBtn');
+            const msg = document.getElementById('copyMessage');
+            
+            btn.innerHTML = '✅ 복사 완료!';
+            btn.style.background = '#4ecca3';
+            msg.style.display = 'block';
+            
+            setTimeout(() => {{
+                btn.innerHTML = '📋 이미지 복사';
+                btn.style.background = 'linear-gradient(135deg, #e94560, #0f3460)';
+                msg.style.display = 'none';
+            }}, 2000);
+            
+        }} catch (err) {{
+            // Clipboard API 실패 시 대체 방법 안내
+            alert('브라우저에서 클립보드 접근이 제한되었습니다.\\n이미지를 우클릭하여 복사해주세요.');
+            console.error('Copy failed:', err);
+        }}
+    }}
+    </script>
     """, unsafe_allow_html=True)
     
-    # 대결 카드
-    st.markdown(f"""
-    <div style="display: flex; justify-content: center; align-items: center; 
-                gap: 1rem; margin: 1.5rem 0; flex-wrap: wrap;">
-        
-        <!-- Player A 카드 -->
-        <div style="background: linear-gradient(135deg, rgba(78, 204, 163, 0.2), rgba(78, 204, 163, 0.05));
-                    border: 2px solid #4ecca3; border-radius: 16px; padding: 1.5rem 2rem;
-                    text-align: center; min-width: 180px; {a_glow}">
-            <p style="font-size: 1.1rem; color: #4ecca3; margin: 0; font-weight: 600;">
-                {a_crown}{player_a}
-            </p>
-            <p style="font-size: 3.5rem; font-weight: 800; color: #4ecca3; margin: 0.5rem 0;">
-                {a_wins}
-            </p>
-            <p style="font-size: 1.5rem; color: #4ecca3; margin: 0;">
-                {a_rate:.1f}%
-            </p>
-        </div>
-        
-        <!-- VS -->
-        <div style="font-size: 2rem; font-weight: 800; color: #ffd369; padding: 0 0.5rem;">
-            VS
-        </div>
-        
-        <!-- Player B 카드 -->
-        <div style="background: linear-gradient(135deg, rgba(255, 107, 107, 0.2), rgba(255, 107, 107, 0.05));
-                    border: 2px solid #ff6b6b; border-radius: 16px; padding: 1.5rem 2rem;
-                    text-align: center; min-width: 180px; {b_glow}">
-            <p style="font-size: 1.1rem; color: #ff6b6b; margin: 0; font-weight: 600;">
-                {b_crown}{player_b}
-            </p>
-            <p style="font-size: 3.5rem; font-weight: 800; color: #ff6b6b; margin: 0.5rem 0;">
-                {b_wins}
-            </p>
-            <p style="font-size: 1.5rem; color: #ff6b6b; margin: 0;">
-                {b_rate:.1f}%
-            </p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # 승률 바
-    st.markdown(f"""
-    <div style="display: flex; height: 35px; border-radius: 20px; overflow: hidden; 
-                margin: 1.5rem 0; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
-        <div style="width: {a_rate}%; background: linear-gradient(90deg, #4ecca3, #45b393); 
-                    display: flex; align-items: center; justify-content: center; 
-                    font-weight: 700; color: white; font-size: 0.95rem;
-                    min-width: {20 if a_rate > 0 else 0}px;">
-            {f'{a_rate:.0f}%' if a_rate >= 15 else ''}
-        </div>
-        <div style="width: {b_rate}%; background: linear-gradient(90deg, #ff6b6b, #ee5a5a); 
-                    display: flex; align-items: center; justify-content: center; 
-                    font-weight: 700; color: white; font-size: 0.95rem;
-                    min-width: {20 if b_rate > 0 else 0}px;">
-            {f'{b_rate:.0f}%' if b_rate >= 15 else ''}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # 상세 기록
-    with st.expander(f"📋 상세 대전 기록 ({len(summary.matches)}경기)"):
-        _display_match_history(summary)
-
-
-def _display_match_history(summary: HeadToHeadSummary):
-    """상세 대전 기록 표시"""
-    
-    for idx, match in enumerate(summary.matches, 1):
-        # 승자 색상 결정
-        if match.winner.lower() == summary.player_a.lower():
-            winner_color = "#4ecca3"
-            p1_style = "font-weight: 700;" if match.player1.lower() == summary.player_a.lower() else ""
-            p2_style = "font-weight: 700;" if match.player2.lower() == summary.player_a.lower() else ""
-        else:
-            winner_color = "#ff6b6b"
-            p1_style = "font-weight: 700;" if match.player1.lower() == summary.player_b.lower() else ""
-            p2_style = "font-weight: 700;" if match.player2.lower() == summary.player_b.lower() else ""
-        
-        st.markdown(f"""
-        <div style="padding: 0.6rem 1rem; margin: 0.4rem 0; 
-                    background: rgba(255,255,255,0.03); border-radius: 8px;
-                    border-left: 3px solid {winner_color};">
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
-                <span style="color: rgba(255,255,255,0.4); font-size: 0.8rem;">#{idx}</span>
-                <span style="flex: 1; text-align: center;">
-                    <span style="{p1_style} color: white;">{match.player1}</span>
-                    <span style="color: #4ecca3; font-weight: 700; margin: 0 0.3rem;">{match.score1}</span>
-                    <span style="color: #ffd369;">:</span>
-                    <span style="color: #ff6b6b; font-weight: 700; margin: 0 0.3rem;">{match.score2}</span>
-                    <span style="{p2_style} color: white;">{match.player2}</span>
-                </span>
-                <span style="color: {winner_color}; font-size: 0.85rem;">🏆 {match.winner}</span>
-            </div>
-            <div style="color: rgba(255,255,255,0.3); font-size: 0.75rem; margin-top: 0.3rem;">
-                {match.date} | {match.match_type}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    # 다운로드 버튼 (백업용)
+    st.download_button(
+        label="💾 이미지 다운로드",
+        data=img_bytes,
+        file_name=f"winrate_{summary.player_a}_vs_{summary.player_b}.png",
+        mime="image/png",
+        use_container_width=True
+    )
