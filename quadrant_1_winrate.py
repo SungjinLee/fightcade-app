@@ -1,14 +1,13 @@
 """
 1사분면: 텍스트 파싱 기반 승률 조회
-- Fightcade 리플레이 목록 텍스트 붙여넣기
-- 자동으로 유저 ID 추출 및 승률 계산
-- 이미지로 결과 생성 + 클립보드 복사
+- 라운드 합계 기반 승률 (스코어 합산)
+- 이미지 생성 + 클립보드 복사
 """
 
 import re
 import io
 import base64
-from typing import List, Dict, Tuple, Optional
+from typing import List, Tuple, Optional
 from dataclasses import dataclass
 import streamlit as st
 import streamlit.components.v1 as components
@@ -32,18 +31,19 @@ class MatchResult:
     score1: int
     player2: str
     score2: int
-    winner: str
     match_type: str
 
 
 @dataclass
 class HeadToHeadSummary:
-    """1:1 대전 요약"""
+    """1:1 대전 요약 (라운드 합계 기반)"""
     player_a: str
     player_b: str
-    total_matches: int
-    player_a_wins: int
-    player_b_wins: int
+    total_games: int          # 총 경기 수
+    total_rounds: int         # 총 라운드 수
+    player_a_rounds: int      # Player A 라운드 승
+    player_b_rounds: int      # Player B 라운드 승
+    winner: str               # 최종 승자
     matches: List[MatchResult]
 
 
@@ -88,18 +88,40 @@ def parse_replay_text(raw_text: str) -> Tuple[Optional[HeadToHeadSummary], Optio
         player_list = ", ".join(sorted(all_players))
         return None, f"정확히 2명의 유저 데이터가 필요합니다. 감지된 유저: {player_list}"
     
+    # 원본 대소문자 찾기
     player_a_original = _find_original_case(matches, unique_players[0])
     player_b_original = _find_original_case(matches, unique_players[1])
     
-    player_a_wins = sum(1 for m in matches if m.winner.lower() == unique_players[0])
-    player_b_wins = len(matches) - player_a_wins
+    # 라운드 합계 계산
+    player_a_rounds = 0
+    player_b_rounds = 0
+    
+    for m in matches:
+        if m.player1.lower() == unique_players[0]:
+            player_a_rounds += m.score1
+            player_b_rounds += m.score2
+        else:
+            player_a_rounds += m.score2
+            player_b_rounds += m.score1
+    
+    total_rounds = player_a_rounds + player_b_rounds
+    
+    # 승자 결정
+    if player_a_rounds > player_b_rounds:
+        winner = player_a_original
+    elif player_b_rounds > player_a_rounds:
+        winner = player_b_original
+    else:
+        winner = "DRAW"
     
     summary = HeadToHeadSummary(
         player_a=player_a_original,
         player_b=player_b_original,
-        total_matches=len(matches),
-        player_a_wins=player_a_wins,
-        player_b_wins=player_b_wins,
+        total_games=len(matches),
+        total_rounds=total_rounds,
+        player_a_rounds=player_a_rounds,
+        player_b_rounds=player_b_rounds,
+        winner=winner,
         matches=matches
     )
     
@@ -134,11 +156,10 @@ def _parse_single_match(lines: List[str], start_idx: int) -> Optional[MatchResul
         return None
     
     player2 = lines[start_idx + 5].strip()
-    winner = player1 if score1 > score2 else player2
     
     return MatchResult(
         date=date_str, game=game, player1=player1, score1=score1,
-        player2=player2, score2=score2, winner=winner, match_type=match_type
+        player2=player2, score2=score2, match_type=match_type
     )
 
 
@@ -156,94 +177,78 @@ def _find_original_case(matches: List[MatchResult], player_lower: str) -> str:
 # 이미지 생성
 # =============================================================================
 def create_result_image(summary: HeadToHeadSummary) -> Optional[bytes]:
-    """승률 결과 이미지 생성"""
+    """승률 결과 이미지 생성 (작은 크기)"""
     if not PIL_AVAILABLE:
         return None
     
-    # 이미지 크기 및 색상 설정
-    width, height = 600, 320
-    bg_color = (26, 26, 46)  # 다크 블루
+    # 이미지 크기 (작게 조정)
+    width, height = 500, 200
+    bg_color = (26, 26, 46)
     
     img = Image.new('RGB', (width, height), bg_color)
     draw = ImageDraw.Draw(img)
     
-    # 폰트 설정 (시스템 기본 폰트 사용)
+    # 폰트 설정
     try:
-        font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-        font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
-        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+        font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
+        font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 20)
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
     except:
         font_large = ImageFont.load_default()
         font_medium = ImageFont.load_default()
         font_small = ImageFont.load_default()
     
     # 색상 정의
-    green = (78, 204, 163)      # Player A 색상
-    red = (255, 107, 107)       # Player B 색상
-    gold = (255, 211, 105)      # 강조 색상
-    white = (255, 255, 255)
+    green = (78, 204, 163)
+    red = (255, 107, 107)
+    gold = (255, 211, 105)
     gray = (150, 150, 150)
     
     # 승률 계산
-    a_rate = (summary.player_a_wins / summary.total_matches) * 100
-    b_rate = (summary.player_b_wins / summary.total_matches) * 100
+    a_rate = (summary.player_a_rounds / summary.total_rounds) * 100 if summary.total_rounds > 0 else 0
+    b_rate = (summary.player_b_rounds / summary.total_rounds) * 100 if summary.total_rounds > 0 else 0
     
     # 승자 표시
-    a_crown = "[WIN] " if summary.player_a_wins > summary.player_b_wins else ""
-    b_crown = "[WIN] " if summary.player_b_wins > summary.player_a_wins else ""
+    a_color = green if summary.winner == summary.player_a else red
+    b_color = green if summary.winner == summary.player_b else red
+    a_prefix = "👑 " if summary.winner == summary.player_a else ""
+    b_prefix = "👑 " if summary.winner == summary.player_b else ""
     
-    # 타이틀 (총 경기 수)
-    title = f"TOTAL {summary.total_matches} GAMES"
-    draw.text((width // 2, 30), title, fill=gold, font=font_small, anchor="mm")
+    # 타이틀
+    title = f"TOTAL {summary.total_games} GAMES / {summary.total_rounds} ROUNDS"
+    draw.text((width // 2, 20), title, fill=gold, font=font_small, anchor="mm")
     
-    # 중앙 VS
-    draw.text((width // 2, 160), "VS", fill=gold, font=font_medium, anchor="mm")
+    # 중앙 스코어
+    score_text = f"{summary.player_a_rounds} : {summary.player_b_rounds}"
+    draw.text((width // 2, 80), score_text, fill=gold, font=font_large, anchor="mm")
     
     # Player A (왼쪽)
-    a_name = f"{a_crown}{summary.player_a}"
-    draw.text((150, 80), a_name, fill=green, font=font_small, anchor="mm")
-    draw.text((150, 140), str(summary.player_a_wins), fill=green, font=font_large, anchor="mm")
-    draw.text((150, 200), f"{a_rate:.1f}%", fill=green, font=font_medium, anchor="mm")
+    draw.text((80, 55), f"{a_prefix}{summary.player_a}", fill=a_color, font=font_small, anchor="mm")
+    draw.text((80, 110), f"{a_rate:.1f}%", fill=a_color, font=font_medium, anchor="mm")
     
     # Player B (오른쪽)
-    b_name = f"{b_crown}{summary.player_b}"
-    draw.text((450, 80), b_name, fill=red, font=font_small, anchor="mm")
-    draw.text((450, 140), str(summary.player_b_wins), fill=red, font=font_large, anchor="mm")
-    draw.text((450, 200), f"{b_rate:.1f}%", fill=red, font=font_medium, anchor="mm")
+    draw.text((420, 55), f"{b_prefix}{summary.player_b}", fill=b_color, font=font_small, anchor="mm")
+    draw.text((420, 110), f"{b_rate:.1f}%", fill=b_color, font=font_medium, anchor="mm")
     
     # 승률 바
-    bar_y = 250
-    bar_height = 25
-    bar_margin = 50
+    bar_y = 145
+    bar_height = 18
+    bar_margin = 40
     bar_width = width - (bar_margin * 2)
     
-    # 바 배경
-    draw.rounded_rectangle(
-        [bar_margin, bar_y, width - bar_margin, bar_y + bar_height],
-        radius=12, fill=(50, 50, 70)
-    )
+    draw.rounded_rectangle([bar_margin, bar_y, width - bar_margin, bar_y + bar_height], radius=9, fill=(50, 50, 70))
     
-    # Player A 바
     a_bar_width = int(bar_width * (a_rate / 100))
     if a_bar_width > 0:
-        draw.rounded_rectangle(
-            [bar_margin, bar_y, bar_margin + a_bar_width, bar_y + bar_height],
-            radius=12, fill=green
-        )
+        draw.rounded_rectangle([bar_margin, bar_y, bar_margin + a_bar_width, bar_y + bar_height], radius=9, fill=green)
     
-    # Player B 바 (오른쪽에서 시작)
     b_bar_width = int(bar_width * (b_rate / 100))
     if b_bar_width > 0:
-        draw.rounded_rectangle(
-            [width - bar_margin - b_bar_width, bar_y, width - bar_margin, bar_y + bar_height],
-            radius=12, fill=red
-        )
+        draw.rounded_rectangle([width - bar_margin - b_bar_width, bar_y, width - bar_margin, bar_y + bar_height], radius=9, fill=red)
     
     # 푸터
-    footer = "Fightcade Win Rate Analyzer"
-    draw.text((width // 2, height - 20), footer, fill=gray, font=font_small, anchor="mm")
+    draw.text((width // 2, height - 15), "Fightcade Win Rate Analyzer", fill=gray, font=font_small, anchor="mm")
     
-    # 바이트로 변환
     img_bytes = io.BytesIO()
     img.save(img_bytes, format='PNG')
     img_bytes.seek(0)
@@ -255,18 +260,16 @@ def create_result_image(summary: HeadToHeadSummary) -> Optional[bytes]:
 # UI 렌더링
 # =============================================================================
 def render_quadrant_1():
-    """1사분면 렌더링: 텍스트 파싱 기반 승률 조회"""
+    """1사분면 렌더링"""
     
     st.markdown('<p class="section-title">⚔️ 승률 조회</p>', unsafe_allow_html=True)
     
-    # 상단: 결과 이미지 표시
+    # 상단: 결과 이미지
     _display_result_image()
     
-    # 구분선
-    st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 0.5rem 0;'>", 
-                unsafe_allow_html=True)
+    st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 0.5rem 0;'>", unsafe_allow_html=True)
     
-    # 하단: 텍스트 입력 영역 (높이 낮게)
+    # 하단: 입력
     replay_text = st.text_area(
         "리플레이 데이터",
         height=80,
@@ -275,7 +278,6 @@ def render_quadrant_1():
         label_visibility="collapsed"
     )
     
-    # 추출 버튼
     if st.button("🎯 승률 추출", key="btn_extract", use_container_width=True):
         if replay_text:
             summary, error = parse_replay_text(replay_text)
@@ -286,37 +288,37 @@ def render_quadrant_1():
                 st.session_state.result_image = None
             else:
                 st.session_state.search_result = summary
-                # 이미지 생성
                 img_bytes = create_result_image(summary)
                 st.session_state.result_image = img_bytes
+                
+                # 데이터 저장 (2사분면 랭킹용)
+                from data_manager import save_match_data
+                save_match_data(summary.matches)
+                
                 st.rerun()
         else:
             st.warning("텍스트를 입력해주세요.")
 
 
 def _display_result_image():
-    """이미지 결과 표시 + 클립보드 복사 버튼"""
+    """이미지 표시 + 복사 버튼"""
     
     summary = st.session_state.get("search_result")
     img_bytes = st.session_state.get("result_image")
     
     if not summary or not img_bytes:
         st.markdown("""
-        <div style="text-align: center; padding: 1.5rem; color: rgba(255,255,255,0.5);">
-            <p style="font-size: 2.5rem; margin: 0;">📋</p>
-            <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem;">리플레이 데이터를 붙여넣고<br>승률 추출 버튼을 눌러주세요</p>
+        <div style="text-align: center; padding: 1rem; color: rgba(255,255,255,0.5);">
+            <p style="font-size: 2rem; margin: 0;">📋</p>
+            <p style="margin: 0.3rem 0 0 0; font-size: 0.85rem;">리플레이 붙여넣기 → 승률 추출</p>
         </div>
         """, unsafe_allow_html=True)
         return
     
-    # 이미지를 base64로 인코딩
     img_b64 = base64.b64encode(img_bytes).decode()
     
-    # st.image로 이미지 표시 + 복사/다운로드 버튼
     col1, col2 = st.columns([3, 1])
-    
     with col2:
-        # 다운로드 버튼
         st.download_button(
             label="💾 저장",
             data=img_bytes,
@@ -325,112 +327,37 @@ def _display_result_image():
             use_container_width=True
         )
     
-    # 이미지와 복사 버튼을 HTML 컴포넌트로 표시
     html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <style>
-            body {{
-                margin: 0;
-                padding: 0;
-                background: transparent;
-                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-            }}
-            .container {{
-                position: relative;
-                display: inline-block;
-                width: 100%;
-            }}
-            .result-image {{
-                width: 100%;
-                max-width: 100%;
-                border-radius: 12px;
-                box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-                display: block;
-            }}
-            .copy-btn {{
-                position: absolute;
-                top: 8px;
-                right: 8px;
-                background: linear-gradient(135deg, #e94560, #0f3460);
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 14px;
-                cursor: pointer;
-                font-weight: 600;
-                font-size: 13px;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-                transition: all 0.3s;
-                z-index: 10;
-            }}
-            .copy-btn:hover {{
-                transform: translateY(-2px);
-                box-shadow: 0 6px 20px rgba(233, 69, 96, 0.4);
-            }}
-            .copy-btn.success {{
-                background: #4ecca3;
-            }}
-            .toast {{
-                position: absolute;
-                bottom: 10px;
-                left: 50%;
-                transform: translateX(-50%);
-                background: rgba(78, 204, 163, 0.95);
-                color: white;
-                padding: 8px 16px;
-                border-radius: 20px;
-                font-size: 13px;
-                font-weight: 600;
-                opacity: 0;
-                transition: opacity 0.3s;
-                z-index: 10;
-            }}
-            .toast.show {{
-                opacity: 1;
-            }}
+            body {{ margin: 0; padding: 0; background: transparent; }}
+            .container {{ position: relative; display: inline-block; width: 100%; }}
+            .result-image {{ width: 100%; max-width: 500px; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); display: block; margin: 0 auto; }}
+            .copy-btn {{ position: absolute; top: 5px; right: 5px; background: linear-gradient(135deg, #e94560, #0f3460); color: white; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer; font-weight: 600; font-size: 12px; z-index: 10; }}
+            .copy-btn:hover {{ transform: translateY(-1px); }}
+            .copy-btn.success {{ background: #4ecca3; }}
         </style>
     </head>
     <body>
         <div class="container">
             <img id="resultImg" class="result-image" src="data:image/png;base64,{img_b64}" />
             <button id="copyBtn" class="copy-btn" onclick="copyImage()">📋 복사</button>
-            <div id="toast" class="toast">✅ 클립보드에 복사됨!</div>
         </div>
-        
         <script>
             async function copyImage() {{
                 const btn = document.getElementById('copyBtn');
-                const toast = document.getElementById('toast');
-                
                 try {{
                     const img = document.getElementById('resultImg');
                     const response = await fetch(img.src);
                     const blob = await response.blob();
-                    
-                    await navigator.clipboard.write([
-                        new ClipboardItem({{ 'image/png': blob }})
-                    ]);
-                    
-                    // 성공 표시
+                    await navigator.clipboard.write([new ClipboardItem({{ 'image/png': blob }})]);
                     btn.innerHTML = '✅ 완료!';
                     btn.classList.add('success');
-                    toast.classList.add('show');
-                    
-                    setTimeout(() => {{
-                        btn.innerHTML = '📋 복사';
-                        btn.classList.remove('success');
-                        toast.classList.remove('show');
-                    }}, 2000);
-                    
+                    setTimeout(() => {{ btn.innerHTML = '📋 복사'; btn.classList.remove('success'); }}, 2000);
                 }} catch (err) {{
-                    // 실패 시 안내
-                    btn.innerHTML = '❌ 실패';
-                    setTimeout(() => {{
-                        btn.innerHTML = '📋 복사';
-                        alert('클립보드 접근이 제한되었습니다.\\n이미지를 우클릭하여 복사하거나\\n저장 버튼을 이용해주세요.');
-                    }}, 500);
+                    alert('클립보드 접근이 제한되었습니다. 저장 버튼을 이용해주세요.');
                 }}
             }}
         </script>
@@ -438,5 +365,4 @@ def _display_result_image():
     </html>
     """
     
-    # HTML 컴포넌트로 렌더링 (높이 조절)
-    components.html(html_content, height=220, scrolling=False)
+    components.html(html_content, height=160, scrolling=False)

@@ -1,221 +1,187 @@
 """
 랭킹 룰 모듈
-- 랭킹 계산 로직을 별도 분리하여 유지보수 용이
-- 추후 weight나 방식 변경 시 이 파일만 수정
+=============================================================================
+룰 변경 시 이 파일만 수정하면 됩니다.
+
+현재 룰:
+1순위: 직접 대결 (A가 B를 이기면 A > B)
+2순위: 총 라운드 승수 (직접 대결이 없으면)
+=============================================================================
 """
 
-from typing import List, Dict, Any
-from data_manager import load_ranking, save_ranking
+from typing import List, Dict, Any, Tuple, Set
+from data_manager import get_all_players, get_head_to_head, get_player_total_stats
 
 
 # =============================================================================
-# 랭킹 계산 룰 (이 함수들만 수정하면 랭킹 방식 변경 가능)
+# 랭킹 계산 메인 함수
 # =============================================================================
-
-def calculate_score(user_data: Dict[str, Any]) -> float:
+def calculate_ranking() -> List[Dict[str, Any]]:
     """
-    개별 유저의 랭킹 점수 계산
-    
-    [현재 룰]: 총 승리 횟수
-    
-    [추후 변경 예시]
-    - 승률 기반: return user_data["total_wins"] / max(user_data["total_matches"], 1)
-    - 가중치 적용: return user_data["total_wins"] * 1.5 + user_data["total_matches"] * 0.5
-    - ELO 방식: 별도 ELO 계산 로직 구현
-    
-    Args:
-        user_data: {"user_id": str, "total_wins": int, "total_matches": int}
+    전체 랭킹 계산
     
     Returns:
-        float: 랭킹 점수 (높을수록 상위)
+        [{"rank": 1, "user_id": "player", "wins": 10, "losses": 5, "games": 3, "note": "..."}, ...]
     """
-    return float(user_data.get("total_wins", 0))
-
-
-def get_ranking_label() -> str:
-    """
-    현재 랭킹 기준 설명 텍스트
-    UI에 표시할 때 사용
-    """
-    return "총 승리 횟수"
-
-
-def format_ranking_display(user_data: Dict[str, Any], rank: int) -> Dict[str, Any]:
-    """
-    랭킹 표시용 데이터 포맷
+    players = get_all_players()
     
-    Args:
-        user_data: 유저 데이터
-        rank: 순위 (1부터 시작)
+    if not players:
+        return []
     
-    Returns:
-        UI 표시용 딕셔너리
-    """
-    total_matches = user_data.get("total_matches", 0)
-    total_wins = user_data.get("total_wins", 0)
+    # 직접 대결 결과 매트릭스 생성
+    h2h_matrix = _build_head_to_head_matrix(players)
     
-    # 승률 계산
-    win_rate = (total_wins / total_matches * 100) if total_matches > 0 else 0
+    # 총 통계
+    total_stats = get_player_total_stats()
     
-    return {
-        "rank": rank,
-        "user_id": user_data.get("user_id", "Unknown"),
-        "total_wins": total_wins,
-        "total_matches": total_matches,
-        "win_rate": f"{win_rate:.1f}%",
-        "score": calculate_score(user_data)
-    }
-
-
-# =============================================================================
-# 랭킹 정렬 및 조회
-# =============================================================================
-
-def sort_ranking(ranking_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    랭킹 데이터 정렬
+    # 1순위: 직접 대결 기반 정렬
+    sorted_players = _sort_by_head_to_head(players, h2h_matrix, total_stats)
     
-    Args:
-        ranking_data: 정렬할 랭킹 리스트
-    
-    Returns:
-        정렬된 랭킹 리스트 (점수 내림차순)
-    """
-    return sorted(
-        ranking_data,
-        key=lambda x: calculate_score(x),
-        reverse=True
-    )
-
-
-def get_sorted_ranking() -> List[Dict[str, Any]]:
-    """
-    정렬된 전체 랭킹 조회
-    
-    Returns:
-        정렬 및 포맷된 랭킹 리스트
-    """
-    ranking_data = load_ranking()
-    sorted_data = sort_ranking(ranking_data)
-    
+    # 랭킹 결과 생성
     result = []
-    for idx, user_data in enumerate(sorted_data, start=1):
-        result.append(format_ranking_display(user_data, idx))
+    for rank, player in enumerate(sorted_players, start=1):
+        stats = total_stats.get(player, {"wins": 0, "losses": 0, "games": 0})
+        
+        result.append({
+            "rank": rank,
+            "user_id": player,
+            "wins": stats["wins"],
+            "losses": stats["losses"],
+            "games": stats["games"],
+            "win_rate": _calculate_win_rate(stats["wins"], stats["losses"])
+        })
     
     return result
 
 
-def get_user_rank(user_id: str) -> int:
+def _build_head_to_head_matrix(players: List[str]) -> Dict[str, Dict[str, int]]:
     """
-    특정 유저의 순위 조회
+    직접 대결 결과 매트릭스 생성
     
-    Args:
-        user_id: 유저 ID
-    
-    Returns:
-        순위 (1부터 시작, 없으면 -1)
+    matrix[A][B] = 1  : A가 B를 이김
+    matrix[A][B] = -1 : A가 B에게 짐
+    matrix[A][B] = 0  : 대결 없음 또는 무승부
     """
-    sorted_ranking = get_sorted_ranking()
-    for entry in sorted_ranking:
-        if entry["user_id"].lower() == user_id.lower():
-            return entry["rank"]
-    return -1
+    matrix: Dict[str, Dict[str, int]] = {}
+    
+    for p in players:
+        matrix[p] = {}
+        for q in players:
+            matrix[p][q] = 0
+    
+    # 모든 플레이어 쌍에 대해 직접 대결 결과 계산
+    for i, p1 in enumerate(players):
+        for p2 in players[i+1:]:
+            h2h = get_head_to_head(p1, p2)
+            
+            if h2h["games"] > 0:
+                if h2h["player_a_rounds"] > h2h["player_b_rounds"]:
+                    matrix[p1][p2] = 1   # p1 승
+                    matrix[p2][p1] = -1  # p2 패
+                elif h2h["player_a_rounds"] < h2h["player_b_rounds"]:
+                    matrix[p1][p2] = -1  # p1 패
+                    matrix[p2][p1] = 1   # p2 승
+                # 무승부는 0 유지
+    
+    return matrix
+
+
+def _sort_by_head_to_head(
+    players: List[str], 
+    h2h_matrix: Dict[str, Dict[str, int]],
+    total_stats: Dict[str, Dict[str, int]]
+) -> List[str]:
+    """
+    직접 대결 + 총 승수 기반 정렬
+    
+    정렬 기준:
+    1. 직접 대결에서 이긴 상대가 많은 순
+    2. 총 라운드 승수가 많은 순
+    3. 승률이 높은 순
+    """
+    
+    def compare_key(player: str) -> Tuple:
+        # 직접 대결 승리 수
+        h2h_wins = sum(1 for opp, result in h2h_matrix[player].items() if result == 1)
+        h2h_losses = sum(1 for opp, result in h2h_matrix[player].items() if result == -1)
+        h2h_score = h2h_wins - h2h_losses
+        
+        # 총 통계
+        stats = total_stats.get(player, {"wins": 0, "losses": 0, "games": 0})
+        total_wins = stats["wins"]
+        win_rate = _calculate_win_rate(stats["wins"], stats["losses"])
+        
+        # 정렬 키 (내림차순을 위해 음수)
+        return (-h2h_score, -h2h_wins, -total_wins, -win_rate)
+    
+    return sorted(players, key=compare_key)
+
+
+def _calculate_win_rate(wins: int, losses: int) -> float:
+    """승률 계산"""
+    total = wins + losses
+    if total == 0:
+        return 0.0
+    return (wins / total) * 100
 
 
 # =============================================================================
-# 랭킹 업데이트 (매치 결과 반영)
+# 직접 대결 체인 확인 (A > B > C 형태)
 # =============================================================================
-
-def update_ranking_from_match(user_a: str, user_b: str, 
-                               user_a_wins: int, user_b_wins: int) -> bool:
+def get_dominance_chain(players: List[str]) -> List[str]:
     """
-    매치 결과를 랭킹에 반영
-    
-    Args:
-        user_a, user_b: 유저 ID
-        user_a_wins, user_b_wins: 각 유저의 승리 횟수
-    
-    Returns:
-        성공 여부
+    직접 대결 우위 체인 반환
+    예: A가 B를 이기고, B가 C를 이기면 [A, B, C]
     """
-    ranking_data = load_ranking()
-    total_matches = user_a_wins + user_b_wins
+    h2h_matrix = _build_head_to_head_matrix(players)
     
-    # user_a 업데이트
-    _update_user_in_ranking(ranking_data, user_a, user_a_wins, total_matches)
+    # 위상 정렬 시도 (사이클 있으면 부분 결과)
+    in_degree = {p: 0 for p in players}
     
-    # user_b 업데이트
-    _update_user_in_ranking(ranking_data, user_b, user_b_wins, total_matches)
+    for p1 in players:
+        for p2 in players:
+            if h2h_matrix[p1][p2] == -1:  # p1이 p2에게 짐 = p2가 p1을 이김
+                in_degree[p1] += 1
     
-    return save_ranking(ranking_data)
-
-
-def _update_user_in_ranking(ranking_data: List[Dict], 
-                            user_id: str, wins: int, matches: int) -> None:
-    """
-    랭킹 데이터 내 특정 유저 업데이트 (내부 함수)
+    # 진입 차수가 0인 노드부터 시작 (가장 강한 플레이어)
+    result = []
+    remaining = set(players)
     
-    주의: 이 함수는 기존 데이터를 덮어씀 (누적 X)
-    누적이 필요하면 data_manager.update_user_ranking 사용
-    """
-    user_found = False
-    for entry in ranking_data:
-        if entry["user_id"].lower() == user_id.lower():
-            # 기존 유저: 해당 매치 결과로 갱신 (최신 조회 기준)
-            entry["total_wins"] = wins
-            entry["total_matches"] = matches
-            user_found = True
-            break
+    while remaining:
+        # 진입 차수가 가장 낮은 플레이어 선택
+        min_degree = float('inf')
+        next_player = None
+        
+        for p in remaining:
+            if in_degree[p] < min_degree:
+                min_degree = in_degree[p]
+                next_player = p
+        
+        if next_player:
+            result.append(next_player)
+            remaining.remove(next_player)
+            
+            # 진입 차수 업데이트
+            for p in remaining:
+                if h2h_matrix[next_player][p] == 1:  # next_player가 p를 이김
+                    in_degree[p] -= 1
     
-    if not user_found:
-        ranking_data.append({
-            "user_id": user_id,
-            "total_wins": wins,
-            "total_matches": matches
-        })
+    return result
 
 
 # =============================================================================
-# 향후 확장을 위한 플레이스홀더
+# 랭킹 라벨 (UI 표시용)
 # =============================================================================
-
-def calculate_elo_change(winner_elo: float, loser_elo: float, k_factor: float = 32) -> tuple:
-    """
-    ELO 점수 변화 계산 (향후 ELO 시스템 도입 시 사용)
-    
-    Args:
-        winner_elo: 승자의 현재 ELO
-        loser_elo: 패자의 현재 ELO
-        k_factor: K 계수 (변동 폭)
-    
-    Returns:
-        (승자 변화량, 패자 변화량)
-    """
-    expected_winner = 1 / (1 + 10 ** ((loser_elo - winner_elo) / 400))
-    expected_loser = 1 - expected_winner
-    
-    winner_change = k_factor * (1 - expected_winner)
-    loser_change = k_factor * (0 - expected_loser)
-    
-    return (winner_change, loser_change)
+def get_ranking_label() -> str:
+    """현재 랭킹 기준 설명"""
+    return "H2H > Total Rounds"
 
 
-def apply_weight(base_score: float, weight_config: Dict[str, float] = None) -> float:
+def get_ranking_description() -> str:
+    """랭킹 룰 상세 설명"""
+    return """
+    **랭킹 산정 기준**
+    1. 직접 대결 우위 (A가 B를 이기면 A > B)
+    2. 직접 대결이 없으면 총 라운드 승수
+    3. 동점 시 승률 순
     """
-    가중치 적용 (향후 weight 시스템 도입 시 사용)
-    
-    Args:
-        base_score: 기본 점수
-        weight_config: 가중치 설정
-    
-    Returns:
-        가중치 적용된 점수
-    """
-    if weight_config is None:
-        return base_score
-    
-    # 예시: {"win_multiplier": 1.5, "bonus": 10}
-    multiplier = weight_config.get("win_multiplier", 1.0)
-    bonus = weight_config.get("bonus", 0)
-    
-    return base_score * multiplier + bonus

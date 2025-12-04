@@ -1,14 +1,21 @@
 """
 데이터 관리 모듈
-- User ID 리스트 저장/불러오기
-- 매치 히스토리 저장/불러오기
-- 랭킹 데이터 저장/불러오기
+- 매치 히스토리 저장/불러오기 (JSON)
+- 비매너 리스트 저장/불러오기 (JSON)
+- 중복 제거 (날짜 + 유저ID 기반)
 """
 
 import json
 import os
-from typing import List, Dict, Any, Optional
-from config import DATA_DIR, USER_LIST_FILE, MATCH_HISTORY_FILE, RANKING_FILE
+from typing import List, Dict, Any, Optional, Set, Tuple
+from datetime import datetime
+
+# =============================================================================
+# 파일 경로 설정
+# =============================================================================
+DATA_DIR = "data"
+MATCH_HISTORY_FILE = f"{DATA_DIR}/match_history.json"
+BADMANNER_FILE = f"{DATA_DIR}/badmanner_list.json"
 
 
 # =============================================================================
@@ -21,7 +28,7 @@ def init_data_directory() -> None:
 
 
 def _load_json(filepath: str) -> Any:
-    """JSON 파일 로드 (없으면 빈 구조 반환)"""
+    """JSON 파일 로드"""
     if not os.path.exists(filepath):
         return None
     try:
@@ -43,166 +50,230 @@ def _save_json(filepath: str, data: Any) -> bool:
 
 
 # =============================================================================
-# User ID 리스트 관리
+# 매치 히스토리 관리
 # =============================================================================
-def load_user_list() -> List[str]:
-    """저장된 유저 리스트 불러오기"""
-    data = _load_json(USER_LIST_FILE)
+def _create_match_key(date: str, player1: str, player2: str, score1: int, score2: int) -> str:
+    """매치 고유 키 생성 (중복 체크용)"""
+    # 플레이어를 정렬하여 일관된 키 생성
+    players = sorted([player1.lower(), player2.lower()])
+    return f"{date}|{players[0]}|{players[1]}|{score1}|{score2}"
+
+
+def load_match_history() -> List[Dict[str, Any]]:
+    """매치 히스토리 불러오기"""
+    data = _load_json(MATCH_HISTORY_FILE)
     if data is None or not isinstance(data, list):
         return []
     return data
 
 
-def save_user_list(user_list: List[str]) -> bool:
-    """유저 리스트 저장"""
-    return _save_json(USER_LIST_FILE, user_list)
-
-
-def add_user(user_id: str) -> bool:
-    """유저 추가 (중복 체크)"""
-    user_list = load_user_list()
-    if user_id in user_list:
-        return False  # 이미 존재
-    user_list.append(user_id)
-    return save_user_list(user_list)
-
-
-def remove_user(user_id: str) -> bool:
-    """유저 삭제"""
-    user_list = load_user_list()
-    if user_id not in user_list:
-        return False  # 존재하지 않음
-    user_list.remove(user_id)
-    return save_user_list(user_list)
-
-
-def search_user(query: str) -> Optional[str]:
-    """유저 검색 (부분 매칭, 첫 번째 결과 반환)"""
-    user_list = load_user_list()
-    query_lower = query.lower()
-    for user in user_list:
-        if query_lower in user.lower():
-            return user
-    return None
-
-
-def user_exists(user_id: str) -> bool:
-    """유저 존재 여부 확인"""
-    return user_id in load_user_list()
-
-
-# =============================================================================
-# 매치 히스토리 관리
-# =============================================================================
-def load_match_history() -> Dict[str, Any]:
-    """매치 히스토리 불러오기
-    
-    구조:
-    {
-        "userA_vs_userB": {
-            "user_a": "userA",
-            "user_b": "userB",
-            "matches": [
-                {"winner": "userA", "score_a": 3, "score_b": 1, "date": "..."},
-                ...
-            ],
-            "summary": {
-                "total_matches": 10,
-                "user_a_wins": 6,
-                "user_b_wins": 4
-            }
-        }
-    }
-    """
-    data = _load_json(MATCH_HISTORY_FILE)
-    if data is None or not isinstance(data, dict):
-        return {}
-    return data
-
-
-def save_match_history(history: Dict[str, Any]) -> bool:
+def save_match_history(history: List[Dict[str, Any]]) -> bool:
     """매치 히스토리 저장"""
     return _save_json(MATCH_HISTORY_FILE, history)
 
 
-def get_match_key(user_a: str, user_b: str) -> str:
-    """두 유저 간 매치 키 생성 (정렬하여 일관성 유지)"""
-    sorted_users = sorted([user_a.lower(), user_b.lower()])
-    return f"{sorted_users[0]}_vs_{sorted_users[1]}"
-
-
-def save_match_result(user_a: str, user_b: str, matches: List[Dict], summary: Dict) -> bool:
-    """특정 유저 쌍의 매치 결과 저장"""
-    history = load_match_history()
-    key = get_match_key(user_a, user_b)
-    history[key] = {
-        "user_a": user_a,
-        "user_b": user_b,
-        "matches": matches,
-        "summary": summary
-    }
-    return save_match_history(history)
-
-
-def get_match_result(user_a: str, user_b: str) -> Optional[Dict]:
-    """특정 유저 쌍의 매치 결과 조회"""
-    history = load_match_history()
-    key = get_match_key(user_a, user_b)
-    return history.get(key)
-
-
-# =============================================================================
-# 랭킹 데이터 관리
-# =============================================================================
-def load_ranking() -> List[Dict[str, Any]]:
-    """랭킹 데이터 불러오기
-    
-    구조:
-    [
-        {"user_id": "userA", "total_wins": 15, "total_matches": 20},
-        {"user_id": "userB", "total_wins": 10, "total_matches": 18},
-        ...
-    ]
+def save_match_data(matches: List[Any]) -> Tuple[int, int]:
     """
-    data = _load_json(RANKING_FILE)
+    매치 데이터 저장 (중복 제거)
+    
+    Returns:
+        (새로 추가된 수, 중복으로 스킵된 수)
+    """
+    history = load_match_history()
+    
+    # 기존 키 세트 생성
+    existing_keys: Set[str] = set()
+    for m in history:
+        key = _create_match_key(
+            m.get("date", ""),
+            m.get("player1", ""),
+            m.get("player2", ""),
+            m.get("score1", 0),
+            m.get("score2", 0)
+        )
+        existing_keys.add(key)
+    
+    added = 0
+    skipped = 0
+    
+    for match in matches:
+        # MatchResult 객체 또는 dict 처리
+        if hasattr(match, 'date'):
+            match_dict = {
+                "date": match.date,
+                "game": match.game,
+                "player1": match.player1,
+                "score1": match.score1,
+                "player2": match.player2,
+                "score2": match.score2,
+                "match_type": match.match_type
+            }
+        else:
+            match_dict = match
+        
+        key = _create_match_key(
+            match_dict.get("date", ""),
+            match_dict.get("player1", ""),
+            match_dict.get("player2", ""),
+            match_dict.get("score1", 0),
+            match_dict.get("score2", 0)
+        )
+        
+        if key not in existing_keys:
+            history.append(match_dict)
+            existing_keys.add(key)
+            added += 1
+        else:
+            skipped += 1
+    
+    save_match_history(history)
+    return added, skipped
+
+
+def get_all_players() -> List[str]:
+    """모든 플레이어 목록 (중복 제거)"""
+    history = load_match_history()
+    players: Set[str] = set()
+    
+    for m in history:
+        players.add(m.get("player1", "").lower())
+        players.add(m.get("player2", "").lower())
+    
+    # 빈 문자열 제거 후 정렬
+    return sorted([p for p in players if p])
+
+
+def get_head_to_head(player_a: str, player_b: str) -> Dict[str, int]:
+    """
+    두 플레이어 간 직접 대결 결과
+    
+    Returns:
+        {"player_a_rounds": int, "player_b_rounds": int, "games": int}
+    """
+    history = load_match_history()
+    a_lower = player_a.lower()
+    b_lower = player_b.lower()
+    
+    a_rounds = 0
+    b_rounds = 0
+    games = 0
+    
+    for m in history:
+        p1 = m.get("player1", "").lower()
+        p2 = m.get("player2", "").lower()
+        s1 = m.get("score1", 0)
+        s2 = m.get("score2", 0)
+        
+        if (p1 == a_lower and p2 == b_lower):
+            a_rounds += s1
+            b_rounds += s2
+            games += 1
+        elif (p1 == b_lower and p2 == a_lower):
+            a_rounds += s2
+            b_rounds += s1
+            games += 1
+    
+    return {
+        "player_a_rounds": a_rounds,
+        "player_b_rounds": b_rounds,
+        "games": games
+    }
+
+
+def get_player_total_stats() -> Dict[str, Dict[str, int]]:
+    """
+    모든 플레이어의 총 라운드 승/패 통계
+    
+    Returns:
+        {"player_id": {"wins": int, "losses": int, "games": int}}
+    """
+    history = load_match_history()
+    stats: Dict[str, Dict[str, int]] = {}
+    
+    for m in history:
+        p1 = m.get("player1", "").lower()
+        p2 = m.get("player2", "").lower()
+        s1 = m.get("score1", 0)
+        s2 = m.get("score2", 0)
+        
+        if p1 not in stats:
+            stats[p1] = {"wins": 0, "losses": 0, "games": 0}
+        if p2 not in stats:
+            stats[p2] = {"wins": 0, "losses": 0, "games": 0}
+        
+        stats[p1]["wins"] += s1
+        stats[p1]["losses"] += s2
+        stats[p1]["games"] += 1
+        
+        stats[p2]["wins"] += s2
+        stats[p2]["losses"] += s1
+        stats[p2]["games"] += 1
+    
+    return stats
+
+
+# =============================================================================
+# 비매너 리스트 관리
+# =============================================================================
+def load_badmanner_list() -> List[Dict[str, Any]]:
+    """비매너 리스트 불러오기"""
+    data = _load_json(BADMANNER_FILE)
     if data is None or not isinstance(data, list):
         return []
     return data
 
 
-def save_ranking(ranking: List[Dict[str, Any]]) -> bool:
-    """랭킹 데이터 저장"""
-    return _save_json(RANKING_FILE, ranking)
+def save_badmanner_list(badmanner_list: List[Dict[str, Any]]) -> bool:
+    """비매너 리스트 저장"""
+    return _save_json(BADMANNER_FILE, badmanner_list)
 
 
-def update_user_ranking(user_id: str, wins: int, matches: int) -> bool:
-    """특정 유저의 랭킹 데이터 업데이트 (누적)"""
-    ranking = load_ranking()
+def add_badmanner(user_id: str, reason: str = "") -> bool:
+    """비매너 유저 추가 (중복 체크)"""
+    badmanner_list = load_badmanner_list()
     
-    # 기존 유저 찾기
-    user_found = False
-    for entry in ranking:
-        if entry["user_id"].lower() == user_id.lower():
-            entry["total_wins"] += wins
-            entry["total_matches"] += matches
-            user_found = True
-            break
+    # 중복 체크
+    for entry in badmanner_list:
+        if entry.get("user_id", "").lower() == user_id.lower():
+            return False
     
-    # 새 유저면 추가
-    if not user_found:
-        ranking.append({
-            "user_id": user_id,
-            "total_wins": wins,
-            "total_matches": matches
-        })
+    badmanner_list.append({
+        "user_id": user_id,
+        "reason": reason,
+        "added_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
     
-    return save_ranking(ranking)
+    return save_badmanner_list(badmanner_list)
 
 
-def get_user_ranking_stats(user_id: str) -> Optional[Dict]:
-    """특정 유저의 랭킹 통계 조회"""
-    ranking = load_ranking()
-    for entry in ranking:
-        if entry["user_id"].lower() == user_id.lower():
+def remove_badmanner(user_id: str) -> bool:
+    """비매너 유저 삭제"""
+    badmanner_list = load_badmanner_list()
+    
+    for i, entry in enumerate(badmanner_list):
+        if entry.get("user_id", "").lower() == user_id.lower():
+            badmanner_list.pop(i)
+            return save_badmanner_list(badmanner_list)
+    
+    return False
+
+
+def is_badmanner(user_id: str) -> bool:
+    """비매너 유저인지 확인"""
+    badmanner_list = load_badmanner_list()
+    for entry in badmanner_list:
+        if entry.get("user_id", "").lower() == user_id.lower():
+            return True
+    return False
+
+
+def search_badmanner(query: str) -> Optional[Dict[str, Any]]:
+    """비매너 유저 검색"""
+    badmanner_list = load_badmanner_list()
+    query_lower = query.lower()
+    
+    for entry in badmanner_list:
+        if query_lower in entry.get("user_id", "").lower():
             return entry
+    
     return None
