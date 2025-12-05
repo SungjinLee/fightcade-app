@@ -251,9 +251,10 @@ def create_result_image(summary: HeadToHeadSummary) -> Optional[bytes]:
     
     img_bytes = io.BytesIO()
     img.save(img_bytes, format='PNG')
-    img_bytes.seek(0)
+    result = img_bytes.getvalue()
+    img_bytes.close()  # 명시적으로 닫기
     
-    return img_bytes.getvalue()
+    return result
 
 
 # =============================================================================
