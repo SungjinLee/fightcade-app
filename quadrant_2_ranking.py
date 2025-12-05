@@ -27,7 +27,7 @@ def create_ranking_image(ranking_data: list) -> bytes:
         return None
     
     # 이미지 크기 (플레이어 수에 따라 조정)
-    num_players = min(len(ranking_data), 10)  # 최대 10명
+    num_players = min(len(ranking_data), 15)  # 최대 15명
     width = 400
     header_height = 50
     row_height = 35
@@ -156,6 +156,14 @@ def _display_ranking_image(img_bytes: bytes, ranking_data: list):
             use_container_width=True
         )
     
+    # 높이 계산 (15명 기준)
+    num_players = min(len(ranking_data), 15)
+    img_height = 50 + (num_players * 35) + 30
+    
+    # 최대 표시 높이 (약 8명 분량, 그 이상은 스크롤)
+    max_display_height = 320
+    needs_scroll = img_height > max_display_height
+    
     # 이미지 + 복사 버튼
     html_content = f"""
     <!DOCTYPE html>
@@ -163,6 +171,23 @@ def _display_ranking_image(img_bytes: bytes, ranking_data: list):
     <head>
         <style>
             body {{ margin: 0; padding: 0; background: transparent; }}
+            .scroll-container {{
+                max-height: {max_display_height}px;
+                overflow-y: {'auto' if needs_scroll else 'hidden'};
+                scrollbar-width: thin;
+                scrollbar-color: #e94560 rgba(255,255,255,0.1);
+            }}
+            .scroll-container::-webkit-scrollbar {{
+                width: 6px;
+            }}
+            .scroll-container::-webkit-scrollbar-track {{
+                background: rgba(255,255,255,0.1);
+                border-radius: 3px;
+            }}
+            .scroll-container::-webkit-scrollbar-thumb {{
+                background: #e94560;
+                border-radius: 3px;
+            }}
             .container {{ position: relative; display: inline-block; width: 100%; }}
             .ranking-image {{ width: 100%; max-width: 400px; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); display: block; margin: 0 auto; }}
             .copy-btn {{ position: absolute; top: 5px; right: 5px; background: linear-gradient(135deg, #e94560, #0f3460); color: white; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer; font-weight: 600; font-size: 12px; z-index: 10; }}
@@ -171,9 +196,11 @@ def _display_ranking_image(img_bytes: bytes, ranking_data: list):
         </style>
     </head>
     <body>
-        <div class="container">
-            <img id="rankImg" class="ranking-image" src="data:image/png;base64,{img_b64}" />
-            <button id="copyBtn" class="copy-btn" onclick="copyImage()">📋 복사</button>
+        <div class="scroll-container">
+            <div class="container">
+                <img id="rankImg" class="ranking-image" src="data:image/png;base64,{img_b64}" />
+                <button id="copyBtn" class="copy-btn" onclick="copyImage()">📋 복사</button>
+            </div>
         </div>
         <script>
             async function copyImage() {{
@@ -195,11 +222,9 @@ def _display_ranking_image(img_bytes: bytes, ranking_data: list):
     </html>
     """
     
-    # 높이 계산
-    num_players = min(len(ranking_data), 10)
-    img_height = 50 + (num_players * 35) + 30 + 20
-    
-    components.html(html_content, height=min(img_height, 300), scrolling=False)
+    # 컴포넌트 높이 (스크롤 영역 포함)
+    component_height = min(img_height + 10, max_display_height + 10)
+    components.html(html_content, height=component_height, scrolling=False)
 
 
 def _display_ranking_text(ranking_data: list):
@@ -211,7 +236,7 @@ def _display_ranking_text(ranking_data: list):
     </p>
     """, unsafe_allow_html=True)
     
-    for entry in ranking_data[:10]:
+    for entry in ranking_data[:15]:
         rank = entry["rank"]
         user_id = entry["user_id"]
         wins = entry["wins"]

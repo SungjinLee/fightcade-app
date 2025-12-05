@@ -390,4 +390,5 @@ def _display_result_image():
     </html>
     """
     
-    components.html(html_content, height=160, scrolling=False)
+    # 이미지 높이(200) + 여유 공간
+    components.html(html_content, height=220, scrolling=False)

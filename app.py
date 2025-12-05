@@ -133,7 +133,11 @@ with header_right:
     # 현재 데이터 상태 표시
     match_count = len(load_match_history())
     badmanner_count = len(load_badmanner_list())
-    st.caption(f"📊 매치: {match_count} | 🚫 비매너: {badmanner_count}")
+    st.markdown(
+        f"<p style='color: rgba(255,255,255,0.5); font-size: 0.85rem; text-align: right; margin: 0;'>"
+        f"📊 매치: {match_count} | 🚫 비매너: {badmanner_count}</p>",
+        unsafe_allow_html=True
+    )
     
     # 백업/복원 버튼
     backup_col, restore_col = st.columns(2)
