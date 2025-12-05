@@ -8,7 +8,9 @@ Fightcade 승률 분석기 - 메인 앱
 """
 
 import streamlit as st
+from datetime import datetime
 from config import PAGE_TITLE, PAGE_ICON
+from data_manager import export_all_data, import_all_data, load_match_history, load_badmanner_list
 
 # =============================================================================
 # 페이지 설정
@@ -89,18 +91,9 @@ st.markdown("""
         font-weight: 300;
     }
     
-    /* 사분면 구분을 위한 컨테이너 스타일 */
-    .quadrant-container {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(233, 69, 96, 0.3);
-        border-radius: 12px;
-        padding: 1rem;
-        min-height: 380px;
-    }
-    
     /* 컬럼 간격 조정 */
     [data-testid="column"] {
-        padding: 0.5rem;
+        padding: 0.3rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -126,10 +119,63 @@ from quadrant_4_tbd import render_quadrant_4
 # =============================================================================
 # 메인 레이아웃
 # =============================================================================
-st.markdown(f"<h1 style='text-align: center; color: #e94560; font-size: 1.8rem;'>{PAGE_ICON} {PAGE_TITLE}</h1>", 
-            unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: rgba(255,255,255,0.5); font-size: 0.85rem; margin-bottom: 1rem;'>Fightcade 대전 기록 분석 · 텍스트 파싱 방식</p>", 
-            unsafe_allow_html=True)
+
+# 상단: 타이틀 + 백업/복원 버튼
+header_left, header_right = st.columns([3, 1])
+
+with header_left:
+    st.markdown(f"<h1 style='color: #e94560; font-size: 1.8rem; margin: 0;'>{PAGE_ICON} {PAGE_TITLE}</h1>", 
+                unsafe_allow_html=True)
+    st.markdown("<p style='color: rgba(255,255,255,0.5); font-size: 0.85rem; margin: 0;'>Fightcade 대전 기록 분석 · 텍스트 파싱 방식</p>", 
+                unsafe_allow_html=True)
+
+with header_right:
+    # 현재 데이터 상태 표시
+    match_count = len(load_match_history())
+    badmanner_count = len(load_badmanner_list())
+    st.caption(f"📊 매치: {match_count} | 🚫 비매너: {badmanner_count}")
+    
+    # 백업/복원 버튼
+    backup_col, restore_col = st.columns(2)
+    
+    with backup_col:
+        # 다운로드 버튼
+        backup_data = export_all_data()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        st.download_button(
+            label="💾 백업",
+            data=backup_data,
+            file_name=f"fightcade_backup_{timestamp}.json",
+            mime="application/json",
+            use_container_width=True,
+            key="backup_btn"
+        )
+    
+    with restore_col:
+        # 복원 팝오버 (expander 사용)
+        with st.popover("📂 복원", use_container_width=True):
+            uploaded_file = st.file_uploader(
+                "백업 파일 선택",
+                type=["json"],
+                key="restore_file",
+                label_visibility="collapsed"
+            )
+            
+            if uploaded_file is not None:
+                if st.button("✅ 복원 실행", key="restore_confirm", use_container_width=True):
+                    try:
+                        json_str = uploaded_file.read().decode("utf-8")
+                        success, message = import_all_data(json_str)
+                        
+                        if success:
+                            st.success(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
+                    except Exception as e:
+                        st.error(f"파일 읽기 오류: {str(e)}")
+
+st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 0.5rem 0 1rem 0;'>", unsafe_allow_html=True)
 
 # 2x2 그리드 - 사분면 구분 개선
 top_left, top_right = st.columns(2, gap="large")

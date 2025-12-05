@@ -295,3 +295,64 @@ def get_all_reasons() -> List[str]:
             reasons.add(reason)
     
     return sorted(list(reasons))
+
+
+# =============================================================================
+# 데이터 백업/복원 (Export/Import)
+# =============================================================================
+def export_all_data() -> str:
+    """
+    모든 데이터를 JSON 문자열로 내보내기
+    
+    Returns:
+        JSON 문자열 (match_history + badmanner_list)
+    """
+    data = {
+        "version": "2.0",
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "match_history": load_match_history(),
+        "badmanner_list": load_badmanner_list()
+    }
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def import_all_data(json_str: str) -> Tuple[bool, str]:
+    """
+    JSON 문자열에서 모든 데이터 가져오기 (기존 데이터 덮어쓰기)
+    
+    Args:
+        json_str: JSON 형식 문자열
+        
+    Returns:
+        (성공 여부, 메시지)
+    """
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        return False, f"JSON 파싱 오류: {str(e)}"
+    
+    # 데이터 검증
+    if not isinstance(data, dict):
+        return False, "올바른 백업 파일 형식이 아닙니다."
+    
+    match_history = data.get("match_history", [])
+    badmanner_list = data.get("badmanner_list", [])
+    
+    if not isinstance(match_history, list) or not isinstance(badmanner_list, list):
+        return False, "데이터 형식이 올바르지 않습니다."
+    
+    # 데이터 저장 (기존 데이터 덮어쓰기)
+    save_match_history(match_history)
+    save_badmanner_list(badmanner_list)
+    
+    match_count = len(match_history)
+    badmanner_count = len(badmanner_list)
+    
+    return True, f"복원 완료: 매치 {match_count}건, 비매너 {badmanner_count}명"
+
+
+def clear_all_data() -> bool:
+    """모든 데이터 초기화"""
+    save_match_history([])
+    save_badmanner_list([])
+    return True

@@ -99,8 +99,6 @@ def _render_add_delete_section():
             )
         else:
             reason = selected_reason
-            # 선택된 사유 표시
-            st.caption(f"선택된 사유: {reason}")
         
         if st.button("➕ 추가", key="btn_add_badmanner", use_container_width=True):
             if new_user_id:
