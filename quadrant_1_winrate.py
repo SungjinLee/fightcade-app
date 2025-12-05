@@ -270,35 +270,59 @@ def render_quadrant_1():
     
     st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 0.5rem 0;'>", unsafe_allow_html=True)
     
-    # 하단: 입력
+    # 세션 상태 초기화 (텍스트 입력 키 버전용)
+    if "input_key_version" not in st.session_state:
+        st.session_state.input_key_version = 0
+    
+    # 하단: 입력 (키 버전으로 초기화 관리)
     replay_text = st.text_area(
         "리플레이 데이터",
         height=80,
         placeholder="Fightcade 리플레이 텍스트 붙여넣기...",
-        key="replay_text_input",
+        key=f"replay_text_input_{st.session_state.input_key_version}",
         label_visibility="collapsed"
     )
     
-    if st.button("🎯 승률 추출", key="btn_extract", use_container_width=True):
-        if replay_text:
-            summary, error = parse_replay_text(replay_text)
-            
-            if error:
-                st.error(f"❌ {error}")
-                st.session_state.search_result = None
-                st.session_state.result_image = None
-            else:
-                st.session_state.search_result = summary
-                img_bytes = create_result_image(summary)
-                st.session_state.result_image = img_bytes
-                
-                # 데이터 저장 (2사분면 랭킹용)
-                from data_manager import save_match_data
-                save_match_data(summary.matches)
-                
-                st.rerun()
+    # 입력 상태 인디케이터 + 버튼
+    col_indicator, col_btn = st.columns([1, 2])
+    
+    with col_indicator:
+        if replay_text.strip():
+            char_count = len(replay_text)
+            st.markdown(
+                f"<span style='color: #4ecca3; font-size: 0.8rem;'>✏️ 입력됨 ({char_count}자)</span>",
+                unsafe_allow_html=True
+            )
         else:
-            st.warning("텍스트를 입력해주세요.")
+            st.markdown(
+                "<span style='color: rgba(255,255,255,0.4); font-size: 0.8rem;'>📋 입력 대기중</span>",
+                unsafe_allow_html=True
+            )
+    
+    with col_btn:
+        if st.button("🎯 승률 추출", key="btn_extract", use_container_width=True):
+            if replay_text:
+                summary, error = parse_replay_text(replay_text)
+                
+                if error:
+                    st.error(f"❌ {error}")
+                    st.session_state.search_result = None
+                    st.session_state.result_image = None
+                else:
+                    st.session_state.search_result = summary
+                    img_bytes = create_result_image(summary)
+                    st.session_state.result_image = img_bytes
+                    
+                    # 데이터 저장 (2사분면 랭킹용)
+                    from data_manager import save_match_data
+                    save_match_data(summary.matches)
+                    
+                    # 입력 텍스트 초기화 (키 버전 증가)
+                    st.session_state.input_key_version += 1
+                    
+                    st.rerun()
+            else:
+                st.warning("텍스트를 입력해주세요.")
 
 
 def _display_result_image():
