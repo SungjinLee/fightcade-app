@@ -34,15 +34,6 @@ st.markdown("""
         max-width: 100%;
     }
     
-    .quadrant-card {
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 16px;
-        padding: 1rem;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        backdrop-filter: blur(10px);
-        min-height: 350px;
-    }
-    
     .section-title {
         font-size: 1.2rem;
         font-weight: 700;
@@ -97,6 +88,20 @@ st.markdown("""
         font-size: 1.5rem;
         font-weight: 300;
     }
+    
+    /* 사분면 구분을 위한 컨테이너 스타일 */
+    .quadrant-container {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(233, 69, 96, 0.3);
+        border-radius: 12px;
+        padding: 1rem;
+        min-height: 380px;
+    }
+    
+    /* 컬럼 간격 조정 */
+    [data-testid="column"] {
+        padding: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -126,29 +131,25 @@ st.markdown(f"<h1 style='text-align: center; color: #e94560; font-size: 1.8rem;'
 st.markdown("<p style='text-align: center; color: rgba(255,255,255,0.5); font-size: 0.85rem; margin-bottom: 1rem;'>Fightcade 대전 기록 분석 · 텍스트 파싱 방식</p>", 
             unsafe_allow_html=True)
 
-# 2x2 그리드
-top_left, top_right = st.columns(2, gap="medium")
-bottom_left, bottom_right = st.columns(2, gap="medium")
+# 2x2 그리드 - 사분면 구분 개선
+top_left, top_right = st.columns(2, gap="large")
+bottom_left, bottom_right = st.columns(2, gap="large")
 
 with top_left:
-    st.markdown('<div class="quadrant-card">', unsafe_allow_html=True)
-    render_quadrant_1()
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        render_quadrant_1()
 
 with top_right:
-    st.markdown('<div class="quadrant-card">', unsafe_allow_html=True)
-    render_quadrant_2()
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        render_quadrant_2()
 
 with bottom_left:
-    st.markdown('<div class="quadrant-card">', unsafe_allow_html=True)
-    render_quadrant_3()
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        render_quadrant_3()
 
 with bottom_right:
-    st.markdown('<div class="quadrant-card">', unsafe_allow_html=True)
-    render_quadrant_4()
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        render_quadrant_4()
 
 # =============================================================================
 # 푸터

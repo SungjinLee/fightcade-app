@@ -277,3 +277,21 @@ def search_badmanner(query: str) -> Optional[Dict[str, Any]]:
             return entry
     
     return None
+
+
+def get_all_reasons() -> List[str]:
+    """
+    기존에 등록된 모든 사유 목록 (중복 제거, 정렬)
+    
+    Returns:
+        사유 문자열 리스트 (빈 문자열 제외)
+    """
+    badmanner_list = load_badmanner_list()
+    reasons: Set[str] = set()
+    
+    for entry in badmanner_list:
+        reason = entry.get("reason", "").strip()
+        if reason:
+            reasons.add(reason)
+    
+    return sorted(list(reasons))

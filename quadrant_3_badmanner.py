@@ -8,7 +8,7 @@
 import streamlit as st
 from data_manager import (
     load_badmanner_list, add_badmanner, remove_badmanner,
-    search_badmanner, is_badmanner
+    search_badmanner, is_badmanner, get_all_reasons
 )
 
 
@@ -68,18 +68,39 @@ def _render_add_delete_section():
     col1, col2 = st.columns(2)
     
     with col1:
+        st.markdown("**➕ 추가**", unsafe_allow_html=True)
+        
         new_user_id = st.text_input(
             "유저 ID",
             key="new_badmanner_input",
             placeholder="추가할 ID",
             label_visibility="collapsed"
         )
-        reason = st.text_input(
-            "사유",
-            key="badmanner_reason_input",
-            placeholder="사유 (선택)",
+        
+        # 기존 사유 목록 가져오기
+        existing_reasons = get_all_reasons()
+        reason_options = ["직접 입력"] + existing_reasons
+        
+        # 사유 선택 드롭다운
+        selected_reason = st.selectbox(
+            "사유 선택",
+            options=reason_options,
+            key="reason_select",
             label_visibility="collapsed"
         )
+        
+        # 직접 입력 선택 시 텍스트 입력 표시
+        if selected_reason == "직접 입력":
+            reason = st.text_input(
+                "사유",
+                key="badmanner_reason_input",
+                placeholder="새 사유 입력 (선택)",
+                label_visibility="collapsed"
+            )
+        else:
+            reason = selected_reason
+            # 선택된 사유 표시
+            st.caption(f"선택된 사유: {reason}")
         
         if st.button("➕ 추가", key="btn_add_badmanner", use_container_width=True):
             if new_user_id:
@@ -92,6 +113,8 @@ def _render_add_delete_section():
                 st.warning("유저 ID를 입력해주세요.")
     
     with col2:
+        st.markdown("**➖ 삭제**", unsafe_allow_html=True)
+        
         # 삭제할 유저 선택
         badmanner_list = load_badmanner_list()
         user_ids = [entry.get("user_id", "") for entry in badmanner_list]
@@ -100,11 +123,18 @@ def _render_add_delete_section():
             "삭제할 유저",
             options=[""] + user_ids,
             key="delete_badmanner_select",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            format_func=lambda x: "삭제할 유저 선택..." if x == "" else x
         )
         
-        # 빈 공간 (사유 입력란 높이 맞춤)
-        st.text("")
+        # 선택된 유저의 사유 표시
+        if delete_user_id:
+            for entry in badmanner_list:
+                if entry.get("user_id") == delete_user_id:
+                    reason_text = entry.get("reason", "")
+                    if reason_text:
+                        st.caption(f"사유: {reason_text}")
+                    break
         
         if st.button("➖ 삭제", key="btn_delete_badmanner", use_container_width=True):
             if delete_user_id:
