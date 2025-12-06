@@ -16,6 +16,15 @@ from datetime import datetime
 DATA_DIR = "data"
 MATCH_HISTORY_FILE = f"{DATA_DIR}/match_history.json"
 BADMANNER_FILE = f"{DATA_DIR}/badmanner_list.json"
+PLAYER_RATINGS_FILE = f"{DATA_DIR}/player_ratings.json"
+
+# =============================================================================
+# 랭킹 설정
+# =============================================================================
+DEFAULT_RATING = 1200       # 초기 레이팅
+DEFAULT_RD = 350            # 초기 Rating Deviation (신뢰도)
+K_FACTOR = 32               # Elo K값
+MIN_GAMES_FOR_RANKING = 9   # 랭킹 반영 최소 판수
 
 
 # =============================================================================
@@ -417,3 +426,222 @@ def get_visit_count() -> int:
         return 0
     
     return data.get("count", 0)
+
+
+# =============================================================================
+# 플레이어 Rating 관리
+# =============================================================================
+def load_player_ratings() -> Dict[str, Dict[str, Any]]:
+    """플레이어 Rating 데이터 로드"""
+    data = _load_json(PLAYER_RATINGS_FILE)
+    if data is None or not isinstance(data, dict):
+        return {}
+    return data
+
+
+def save_player_ratings(ratings: Dict[str, Dict[str, Any]]) -> bool:
+    """플레이어 Rating 데이터 저장"""
+    return _save_json(PLAYER_RATINGS_FILE, ratings)
+
+
+def get_player_rating(player_id: str) -> Dict[str, Any]:
+    """
+    특정 플레이어의 Rating 정보 조회
+    없으면 기본값 반환
+    """
+    ratings = load_player_ratings()
+    player_lower = player_id.lower()
+    
+    if player_lower in ratings:
+        return ratings[player_lower]
+    
+    return {
+        "rating": DEFAULT_RATING,
+        "rd": DEFAULT_RD,
+        "games": 0,
+        "last_played": None
+    }
+
+
+def _calculate_expected_win_rate(my_rating: float, opp_rating: float) -> float:
+    """기대 승률 계산 (Elo 공식)"""
+    return 1 / (1 + 10 ** ((opp_rating - my_rating) / 400))
+
+
+def _calculate_margin_multiplier(winner_score: int, loser_score: int) -> float:
+    """
+    마진 가중치 계산
+    - 3:0 완승 → 1.5
+    - 3:1 → 1.25
+    - 3:2 신승 → 1.0
+    - 2:0 → 1.3
+    - 2:1 → 1.1
+    - 기타 → 1.0
+    """
+    diff = winner_score - loser_score
+    total = winner_score + loser_score
+    
+    if total == 0:
+        return 1.0
+    
+    # 스코어 차이에 따른 가중치
+    if diff >= 3:
+        return 1.5
+    elif diff == 2:
+        return 1.3 if winner_score >= 3 else 1.25
+    elif diff == 1:
+        return 1.1 if winner_score <= 2 else 1.0
+    else:
+        return 1.0
+
+
+def update_ratings_from_match(
+    player1: str, 
+    score1: int, 
+    player2: str, 
+    score2: int
+) -> Tuple[float, float]:
+    """
+    매치 결과로 양쪽 플레이어 Rating 업데이트
+    
+    Returns:
+        (player1 변동량, player2 변동량)
+    """
+    ratings = load_player_ratings()
+    p1_lower = player1.lower()
+    p2_lower = player2.lower()
+    
+    # 기존 Rating 조회 (없으면 기본값)
+    p1_data = ratings.get(p1_lower, {
+        "rating": DEFAULT_RATING,
+        "rd": DEFAULT_RD,
+        "games": 0
+    })
+    p2_data = ratings.get(p2_lower, {
+        "rating": DEFAULT_RATING,
+        "rd": DEFAULT_RD,
+        "games": 0
+    })
+    
+    r1 = p1_data.get("rating", DEFAULT_RATING)
+    r2 = p2_data.get("rating", DEFAULT_RATING)
+    
+    # 기대 승률
+    exp1 = _calculate_expected_win_rate(r1, r2)
+    exp2 = _calculate_expected_win_rate(r2, r1)
+    
+    # 실제 결과 (승리=1, 패배=0, 무승부=0.5)
+    if score1 > score2:
+        actual1, actual2 = 1, 0
+        margin = _calculate_margin_multiplier(score1, score2)
+    elif score2 > score1:
+        actual1, actual2 = 0, 1
+        margin = _calculate_margin_multiplier(score2, score1)
+    else:
+        actual1, actual2 = 0.5, 0.5
+        margin = 1.0
+    
+    # Rating 변동 계산
+    delta1 = K_FACTOR * (actual1 - exp1) * margin
+    delta2 = K_FACTOR * (actual2 - exp2) * margin
+    
+    # 새 Rating 적용
+    new_r1 = r1 + delta1
+    new_r2 = r2 + delta2
+    
+    # RD 감소 (게임할수록 신뢰도 증가 = RD 감소)
+    new_rd1 = max(50, p1_data.get("rd", DEFAULT_RD) * 0.95)
+    new_rd2 = max(50, p2_data.get("rd", DEFAULT_RD) * 0.95)
+    
+    # 저장
+    today = get_today_str()
+    ratings[p1_lower] = {
+        "rating": round(new_r1, 1),
+        "rd": round(new_rd1, 1),
+        "games": p1_data.get("games", 0) + 1,
+        "last_played": today
+    }
+    ratings[p2_lower] = {
+        "rating": round(new_r2, 1),
+        "rd": round(new_rd2, 1),
+        "games": p2_data.get("games", 0) + 1,
+        "last_played": today
+    }
+    
+    save_player_ratings(ratings)
+    
+    return round(delta1, 1), round(delta2, 1)
+
+
+def recalculate_all_ratings() -> int:
+    """
+    모든 매치 히스토리를 기반으로 Rating 재계산
+    (데이터 마이그레이션 또는 리셋 시 사용)
+    
+    Returns:
+        처리된 매치 수
+    """
+    # Rating 초기화
+    save_player_ratings({})
+    
+    # 매치 히스토리 로드
+    history = load_match_history()
+    
+    if not history:
+        return 0
+    
+    # 날짜순 정렬 (오래된 것부터)
+    sorted_history = sorted(history, key=lambda x: x.get("date", ""))
+    
+    # 각 매치마다 Rating 업데이트
+    for match in sorted_history:
+        player1 = match.get("player1", "")
+        player2 = match.get("player2", "")
+        score1 = match.get("score1", 0)
+        score2 = match.get("score2", 0)
+        
+        if player1 and player2:
+            update_ratings_from_match(player1, score1, player2, score2)
+    
+    return len(sorted_history)
+
+
+def get_all_player_ratings() -> List[Dict[str, Any]]:
+    """
+    모든 플레이어의 Rating 정보를 랭킹 순으로 반환
+    (최소 판수 미달은 제외)
+    
+    Returns:
+        [{"user_id": str, "rating": float, "rd": float, "games": int, ...}, ...]
+    """
+    ratings = load_player_ratings()
+    total_stats = get_player_total_stats()
+    
+    result = []
+    for player_id, data in ratings.items():
+        games = data.get("games", 0)
+        
+        # 최소 판수 체크
+        if games < MIN_GAMES_FOR_RANKING:
+            continue
+        
+        stats = total_stats.get(player_id, {"wins": 0, "losses": 0, "games": 0})
+        win_rate = 0.0
+        if stats["wins"] + stats["losses"] > 0:
+            win_rate = (stats["wins"] / (stats["wins"] + stats["losses"])) * 100
+        
+        result.append({
+            "user_id": player_id,
+            "rating": data.get("rating", DEFAULT_RATING),
+            "rd": data.get("rd", DEFAULT_RD),
+            "games": games,
+            "wins": stats["wins"],
+            "losses": stats["losses"],
+            "win_rate": round(win_rate, 1),
+            "last_played": data.get("last_played")
+        })
+    
+    # Rating 순 정렬 (내림차순)
+    result.sort(key=lambda x: (-x["rating"], -x["win_rate"], -x["games"]))
+    
+    return result

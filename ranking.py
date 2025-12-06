@@ -1,17 +1,22 @@
 """
-랭킹 룰 모듈
+랭킹 룰 모듈 (Elo Rating 기반)
 =============================================================================
-룰 변경 시 이 파일만 수정하면 됩니다.
+수정된 Elo Rating 시스템
 
-현재 룰:
-1순위: 직접 대결 승률 (A가 B를 상대로 높은 승률이면 A > B)
-2순위: 총 승률 (직접 대결이 없거나 동률이면)
-3순위: 총 판수 (승률도 같으면)
+정렬 기준:
+1순위: Rating (MMR)
+2순위: 승률
+3순위: 판수
+
+최소 9판 이상 플레이해야 랭킹에 반영됨
 =============================================================================
 """
 
-from typing import List, Dict, Any, Tuple, Set
-from data_manager import get_all_players, get_head_to_head, get_player_total_stats
+from typing import List, Dict, Any
+from data_manager import (
+    get_all_player_ratings,
+    MIN_GAMES_FOR_RANKING
+)
 
 
 # =============================================================================
@@ -19,154 +24,30 @@ from data_manager import get_all_players, get_head_to_head, get_player_total_sta
 # =============================================================================
 def calculate_ranking() -> List[Dict[str, Any]]:
     """
-    전체 랭킹 계산
+    전체 랭킹 계산 (Elo Rating 기반)
     
     Returns:
-        [{"rank": 1, "user_id": "player", "wins": 10, "losses": 5, "games": 3, "note": "..."}, ...]
+        [{"rank": 1, "user_id": "player", "rating": 1500, "wins": 10, ...}, ...]
     """
-    players = get_all_players()
+    # Rating 기준 정렬된 플레이어 목록 조회
+    players = get_all_player_ratings()
     
     if not players:
         return []
     
-    # 직접 대결 결과 매트릭스 생성
-    h2h_matrix = _build_head_to_head_matrix(players)
-    
-    # 총 통계
-    total_stats = get_player_total_stats()
-    
-    # 1순위: 직접 대결 기반 정렬
-    sorted_players = _sort_by_head_to_head(players, h2h_matrix, total_stats)
-    
-    # 랭킹 결과 생성
+    # 순위 부여
     result = []
-    for rank, player in enumerate(sorted_players, start=1):
-        stats = total_stats.get(player, {"wins": 0, "losses": 0, "games": 0})
-        
+    for rank, player_data in enumerate(players, start=1):
         result.append({
             "rank": rank,
-            "user_id": player,
-            "wins": stats["wins"],
-            "losses": stats["losses"],
-            "games": stats["games"],
-            "win_rate": _calculate_win_rate(stats["wins"], stats["losses"])
+            "user_id": player_data["user_id"],
+            "rating": player_data["rating"],
+            "rd": player_data["rd"],
+            "wins": player_data["wins"],
+            "losses": player_data["losses"],
+            "games": player_data["games"],
+            "win_rate": player_data["win_rate"]
         })
-    
-    return result
-
-
-def _build_head_to_head_matrix(players: List[str]) -> Dict[str, Dict[str, int]]:
-    """
-    직접 대결 결과 매트릭스 생성
-    
-    matrix[A][B] = 1  : A가 B를 이김
-    matrix[A][B] = -1 : A가 B에게 짐
-    matrix[A][B] = 0  : 대결 없음 또는 무승부
-    """
-    matrix: Dict[str, Dict[str, int]] = {}
-    
-    for p in players:
-        matrix[p] = {}
-        for q in players:
-            matrix[p][q] = 0
-    
-    # 모든 플레이어 쌍에 대해 직접 대결 결과 계산
-    for i, p1 in enumerate(players):
-        for p2 in players[i+1:]:
-            h2h = get_head_to_head(p1, p2)
-            
-            if h2h["games"] > 0:
-                if h2h["player_a_rounds"] > h2h["player_b_rounds"]:
-                    matrix[p1][p2] = 1   # p1 승
-                    matrix[p2][p1] = -1  # p2 패
-                elif h2h["player_a_rounds"] < h2h["player_b_rounds"]:
-                    matrix[p1][p2] = -1  # p1 패
-                    matrix[p2][p1] = 1   # p2 승
-                # 무승부는 0 유지
-    
-    return matrix
-
-
-def _sort_by_head_to_head(
-    players: List[str], 
-    h2h_matrix: Dict[str, Dict[str, int]],
-    total_stats: Dict[str, Dict[str, int]]
-) -> List[str]:
-    """
-    직접 대결 승률 + 총 승률 + 총 판수 기반 정렬
-    
-    정렬 기준:
-    1. 직접 대결에서 이긴 상대가 많은 순 (승률 기반)
-    2. 총 승률이 높은 순
-    3. 총 판수가 많은 순
-    """
-    
-    def compare_key(player: str) -> Tuple:
-        # 직접 대결 승리 수 (승률 기반)
-        h2h_wins = sum(1 for opp, result in h2h_matrix[player].items() if result == 1)
-        h2h_losses = sum(1 for opp, result in h2h_matrix[player].items() if result == -1)
-        h2h_score = h2h_wins - h2h_losses
-        
-        # 총 통계
-        stats = total_stats.get(player, {"wins": 0, "losses": 0, "games": 0})
-        win_rate = _calculate_win_rate(stats["wins"], stats["losses"])
-        total_games = stats["games"]
-        
-        # 정렬 키 (내림차순을 위해 음수)
-        # 1순위: 직접대결 스코어, 2순위: 총 승률, 3순위: 총 판수
-        return (-h2h_score, -h2h_wins, -win_rate, -total_games)
-    
-    return sorted(players, key=compare_key)
-
-
-def _calculate_win_rate(wins: int, losses: int) -> float:
-    """승률 계산"""
-    total = wins + losses
-    if total == 0:
-        return 0.0
-    return (wins / total) * 100
-
-
-# =============================================================================
-# 직접 대결 체인 확인 (A > B > C 형태)
-# =============================================================================
-def get_dominance_chain(players: List[str]) -> List[str]:
-    """
-    직접 대결 우위 체인 반환
-    예: A가 B를 이기고, B가 C를 이기면 [A, B, C]
-    """
-    h2h_matrix = _build_head_to_head_matrix(players)
-    
-    # 위상 정렬 시도 (사이클 있으면 부분 결과)
-    in_degree = {p: 0 for p in players}
-    
-    for p1 in players:
-        for p2 in players:
-            if h2h_matrix[p1][p2] == -1:  # p1이 p2에게 짐 = p2가 p1을 이김
-                in_degree[p1] += 1
-    
-    # 진입 차수가 0인 노드부터 시작 (가장 강한 플레이어)
-    result = []
-    remaining = set(players)
-    
-    while remaining:
-        # 진입 차수가 가장 낮은 플레이어 선택
-        min_degree = float('inf')
-        next_player = None
-        
-        for p in remaining:
-            if in_degree[p] < min_degree:
-                min_degree = in_degree[p]
-                next_player = p
-        
-        if next_player:
-            result.append(next_player)
-            remaining.remove(next_player)
-            
-            # 진입 차수 업데이트
-            for p in remaining:
-                if h2h_matrix[next_player][p] == 1:  # next_player가 p를 이김
-                    in_degree[p] -= 1
     
     return result
 
@@ -176,14 +57,20 @@ def get_dominance_chain(players: List[str]) -> List[str]:
 # =============================================================================
 def get_ranking_label() -> str:
     """현재 랭킹 기준 설명"""
-    return "H2H > Win Rate > Games"
+    return f"Elo Rating (min {MIN_GAMES_FOR_RANKING} games)"
 
 
 def get_ranking_description() -> str:
     """랭킹 룰 상세 설명"""
-    return """
-    **랭킹 산정 기준**
-    1. 직접 대결 우위 (A가 B를 이기면 A > B)
-    2. 총 승률 순
-    3. 동점 시 총 판수 순
+    return f"""
+    **랭킹 산정 기준 (Elo Rating)**
+    - 기본 점수: 1200점
+    - 승리 시 점수 상승, 패배 시 하락
+    - 스코어 차이(마진)에 따라 가중치 적용
+    - 최소 {MIN_GAMES_FOR_RANKING}판 이상 플레이 필요
+    
+    **정렬 순서**
+    1. Rating 점수
+    2. 승률
+    3. 총 판수
     """

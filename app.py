@@ -2,7 +2,7 @@
 Fightcade 승률 분석기 - 메인 앱
 4분면 레이아웃:
 - 1사분면: 텍스트 파싱 기반 승률 조회
-- 2사분면: 랭킹 시스템 (직접대결 > 총승수)
+- 2사분면: 랭킹 시스템 (Elo Rating)
 - 3사분면: 비매너 리스트
 - 4사분면: TBD (예약)
 """
@@ -12,7 +12,7 @@ from datetime import datetime
 from config import PAGE_TITLE, PAGE_ICON
 from data_manager import (
     export_all_data, import_all_data, load_match_history, load_badmanner_list,
-    increment_visit_count, get_visit_count
+    increment_visit_count, get_visit_count, recalculate_all_ratings
 )
 
 # =============================================================================
@@ -116,6 +116,13 @@ if "visit_counted" not in st.session_state:
     st.session_state.visit_counted = True
     increment_visit_count()
 
+# Rating 초기화 (기존 데이터가 있고 Rating이 없으면 자동 계산)
+if "rating_initialized" not in st.session_state:
+    st.session_state.rating_initialized = True
+    from data_manager import load_player_ratings
+    if not load_player_ratings() and load_match_history():
+        recalculate_all_ratings()
+
 # =============================================================================
 # 모듈 임포트
 # =============================================================================
@@ -217,6 +224,8 @@ with footer_right:
                         success, message = import_all_data(json_str)
                         
                         if success:
+                            # Rating 재계산
+                            recalculate_all_ratings()
                             st.success(message)
                             st.rerun()
                         else:

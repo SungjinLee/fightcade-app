@@ -22,13 +22,13 @@ from ranking import calculate_ranking, get_ranking_label
 # 이미지 생성
 # =============================================================================
 def create_ranking_image(ranking_data: list) -> bytes:
-    """랭킹 이미지 생성"""
+    """랭킹 이미지 생성 (Elo Rating 포함)"""
     if not PIL_AVAILABLE or not ranking_data:
         return None
     
     # 이미지 크기 (플레이어 수에 따라 조정)
     num_players = min(len(ranking_data), 15)  # 최대 15명
-    width = 400
+    width = 450
     header_height = 50
     row_height = 35
     height = header_height + (num_players * row_height) + 30
@@ -54,9 +54,10 @@ def create_ranking_image(ranking_data: list) -> bytes:
     white = (255, 255, 255)
     gray = (150, 150, 150)
     green = (78, 204, 163)
+    cyan = (100, 200, 255)
     
     # 헤더
-    draw.text((width // 2, 25), "RANKING", fill=gold, font=font_title, anchor="mm")
+    draw.text((width // 2, 25), "ELO RANKING", fill=gold, font=font_title, anchor="mm")
     
     # 구분선
     draw.line([(20, header_height - 5), (width - 20, header_height - 5)], fill=(50, 50, 70), width=2)
@@ -67,6 +68,7 @@ def create_ranking_image(ranking_data: list) -> bytes:
         
         rank = entry["rank"]
         user_id = entry["user_id"]
+        rating = entry.get("rating", 1200)
         wins = entry["wins"]
         losses = entry["losses"]
         win_rate = entry.get("win_rate", 0)
@@ -82,21 +84,25 @@ def create_ranking_image(ranking_data: list) -> bytes:
             rank_color = white
         
         # 순위 (숫자)
-        draw.text((35, y), f"{rank}.", fill=rank_color, font=font_row, anchor="mm")
+        draw.text((30, y), f"{rank}.", fill=rank_color, font=font_row, anchor="mm")
         
         # 유저 ID
-        draw.text((100, y), user_id[:15], fill=white, font=font_row, anchor="lm")
+        draw.text((80, y), user_id[:12], fill=white, font=font_row, anchor="lm")
+        
+        # Rating
+        rating_text = f"{int(rating)}"
+        draw.text((230, y), rating_text, fill=cyan, font=font_row, anchor="mm")
         
         # 전적 (W:L)
         record = f"{wins}:{losses}"
-        draw.text((280, y), record, fill=green, font=font_row, anchor="mm")
+        draw.text((320, y), record, fill=green, font=font_small, anchor="mm")
         
         # 승률
         rate_text = f"{win_rate:.1f}%"
-        draw.text((350, y), rate_text, fill=gray, font=font_small, anchor="mm")
+        draw.text((400, y), rate_text, fill=gray, font=font_small, anchor="mm")
     
     # 푸터
-    draw.text((width // 2, height - 12), "H2H > Win Rate > Games", fill=gray, font=font_small, anchor="mm")
+    draw.text((width // 2, height - 12), "Elo Rating System", fill=gray, font=font_small, anchor="mm")
     
     img_bytes = io.BytesIO()
     img.save(img_bytes, format='PNG')
@@ -239,6 +245,7 @@ def _display_ranking_text(ranking_data: list):
     for entry in ranking_data[:15]:
         rank = entry["rank"]
         user_id = entry["user_id"]
+        rating = entry.get("rating", 1200)
         wins = entry["wins"]
         losses = entry["losses"]
         win_rate = entry.get("win_rate", 0)
@@ -260,6 +267,7 @@ def _display_ranking_text(ranking_data: list):
         <div style="padding: 0.5rem; margin: 0.3rem 0; background: rgba(255,255,255,0.03); border-radius: 6px; display: flex; align-items: center;">
             <span style="width: 40px; color: {color}; font-weight: 700;">{medal}</span>
             <span style="flex: 1; color: white;">{user_id}</span>
+            <span style="color: #64c8ff; margin-right: 1rem; font-weight: 600;">{int(rating)}</span>
             <span style="color: #4ecca3; margin-right: 1rem;">{wins}:{losses}</span>
             <span style="color: rgba(255,255,255,0.5); font-size: 0.8rem;">{win_rate:.1f}%</span>
         </div>

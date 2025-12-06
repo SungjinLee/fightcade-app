@@ -314,8 +314,16 @@ def render_quadrant_1():
                     st.session_state.result_image = img_bytes
                     
                     # 데이터 저장 (2사분면 랭킹용)
-                    from data_manager import save_match_data
-                    save_match_data(summary.matches)
+                    from data_manager import save_match_data, update_ratings_from_match
+                    added, skipped = save_match_data(summary.matches)
+                    
+                    # Rating 업데이트 (새로 추가된 매치만)
+                    if added > 0:
+                        for match in summary.matches:
+                            update_ratings_from_match(
+                                match.player1, match.score1,
+                                match.player2, match.score2
+                            )
                     
                     # 입력 텍스트 초기화 (키 버전 증가)
                     st.session_state.input_key_version += 1
