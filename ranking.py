@@ -4,8 +4,9 @@
 룰 변경 시 이 파일만 수정하면 됩니다.
 
 현재 룰:
-1순위: 직접 대결 (A가 B를 이기면 A > B)
-2순위: 총 라운드 승수 (직접 대결이 없으면)
+1순위: 직접 대결 승률 (A가 B를 상대로 높은 승률이면 A > B)
+2순위: 총 승률 (직접 대결이 없거나 동률이면)
+3순위: 총 판수 (승률도 같으면)
 =============================================================================
 """
 
@@ -92,27 +93,28 @@ def _sort_by_head_to_head(
     total_stats: Dict[str, Dict[str, int]]
 ) -> List[str]:
     """
-    직접 대결 + 총 승수 기반 정렬
+    직접 대결 승률 + 총 승률 + 총 판수 기반 정렬
     
     정렬 기준:
-    1. 직접 대결에서 이긴 상대가 많은 순
-    2. 총 라운드 승수가 많은 순
-    3. 승률이 높은 순
+    1. 직접 대결에서 이긴 상대가 많은 순 (승률 기반)
+    2. 총 승률이 높은 순
+    3. 총 판수가 많은 순
     """
     
     def compare_key(player: str) -> Tuple:
-        # 직접 대결 승리 수
+        # 직접 대결 승리 수 (승률 기반)
         h2h_wins = sum(1 for opp, result in h2h_matrix[player].items() if result == 1)
         h2h_losses = sum(1 for opp, result in h2h_matrix[player].items() if result == -1)
         h2h_score = h2h_wins - h2h_losses
         
         # 총 통계
         stats = total_stats.get(player, {"wins": 0, "losses": 0, "games": 0})
-        total_wins = stats["wins"]
         win_rate = _calculate_win_rate(stats["wins"], stats["losses"])
+        total_games = stats["games"]
         
         # 정렬 키 (내림차순을 위해 음수)
-        return (-h2h_score, -h2h_wins, -total_wins, -win_rate)
+        # 1순위: 직접대결 스코어, 2순위: 총 승률, 3순위: 총 판수
+        return (-h2h_score, -h2h_wins, -win_rate, -total_games)
     
     return sorted(players, key=compare_key)
 
@@ -174,7 +176,7 @@ def get_dominance_chain(players: List[str]) -> List[str]:
 # =============================================================================
 def get_ranking_label() -> str:
     """현재 랭킹 기준 설명"""
-    return "H2H > Total Rounds"
+    return "H2H > Win Rate > Games"
 
 
 def get_ranking_description() -> str:
@@ -182,6 +184,6 @@ def get_ranking_description() -> str:
     return """
     **랭킹 산정 기준**
     1. 직접 대결 우위 (A가 B를 이기면 A > B)
-    2. 직접 대결이 없으면 총 라운드 승수
-    3. 동점 시 승률 순
+    2. 총 승률 순
+    3. 동점 시 총 판수 순
     """

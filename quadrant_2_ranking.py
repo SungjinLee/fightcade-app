@@ -96,7 +96,7 @@ def create_ranking_image(ranking_data: list) -> bytes:
         draw.text((350, y), rate_text, fill=gray, font=font_small, anchor="mm")
     
     # 푸터
-    draw.text((width // 2, height - 12), "H2H > Total Rounds", fill=gray, font=font_small, anchor="mm")
+    draw.text((width // 2, height - 12), "H2H > Win Rate > Games", fill=gray, font=font_small, anchor="mm")
     
     img_bytes = io.BytesIO()
     img.save(img_bytes, format='PNG')

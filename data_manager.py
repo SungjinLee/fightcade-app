@@ -356,3 +356,64 @@ def clear_all_data() -> bool:
     save_match_history([])
     save_badmanner_list([])
     return True
+
+
+# =============================================================================
+# 일일 방문수 카운터
+# =============================================================================
+VISIT_COUNT_FILE = f"{DATA_DIR}/visit_count.json"
+
+
+def get_today_str() -> str:
+    """오늘 날짜 문자열 반환 (YYYY-MM-DD)"""
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def load_visit_count() -> Dict[str, Any]:
+    """방문수 데이터 로드"""
+    data = _load_json(VISIT_COUNT_FILE)
+    if data is None or not isinstance(data, dict):
+        return {"date": get_today_str(), "count": 0}
+    return data
+
+
+def save_visit_count(data: Dict[str, Any]) -> bool:
+    """방문수 데이터 저장"""
+    return _save_json(VISIT_COUNT_FILE, data)
+
+
+def increment_visit_count() -> int:
+    """
+    방문수 증가 및 반환
+    날짜가 바뀌면 리셋
+    
+    Returns:
+        오늘의 방문수
+    """
+    data = load_visit_count()
+    today = get_today_str()
+    
+    if data.get("date") != today:
+        # 날짜가 바뀌면 리셋
+        data = {"date": today, "count": 1}
+    else:
+        data["count"] = data.get("count", 0) + 1
+    
+    save_visit_count(data)
+    return data["count"]
+
+
+def get_visit_count() -> int:
+    """
+    현재 방문수 반환 (증가 없이)
+    
+    Returns:
+        오늘의 방문수
+    """
+    data = load_visit_count()
+    today = get_today_str()
+    
+    if data.get("date") != today:
+        return 0
+    
+    return data.get("count", 0)

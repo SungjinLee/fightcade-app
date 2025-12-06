@@ -10,7 +10,10 @@ Fightcade 승률 분석기 - 메인 앱
 import streamlit as st
 from datetime import datetime
 from config import PAGE_TITLE, PAGE_ICON
-from data_manager import export_all_data, import_all_data, load_match_history, load_badmanner_list
+from data_manager import (
+    export_all_data, import_all_data, load_match_history, load_badmanner_list,
+    increment_visit_count, get_visit_count
+)
 
 # =============================================================================
 # 페이지 설정
@@ -108,6 +111,11 @@ if "result_image" not in st.session_state:
 if "highlighted_badmanner" not in st.session_state:
     st.session_state.highlighted_badmanner = None
 
+# 방문수 카운트 (세션당 1회만)
+if "visit_counted" not in st.session_state:
+    st.session_state.visit_counted = True
+    increment_visit_count()
+
 # =============================================================================
 # 모듈 임포트
 # =============================================================================
@@ -120,7 +128,7 @@ from quadrant_4_tbd import render_quadrant_4
 # 메인 레이아웃
 # =============================================================================
 
-# 상단: 타이틀 + 백업/복원 버튼
+# 상단: 타이틀 + 방문수/데이터 상태
 header_left, header_right = st.columns([3, 1])
 
 with header_left:
@@ -130,6 +138,14 @@ with header_left:
                 unsafe_allow_html=True)
 
 with header_right:
+    # 오늘 방문수
+    today_visits = get_visit_count()
+    st.markdown(
+        f"<p style='color: #ffd369; font-size: 1rem; text-align: right; margin: 0; font-weight: 600;'>"
+        f"👥 오늘 방문: {today_visits}</p>",
+        unsafe_allow_html=True
+    )
+    
     # 현재 데이터 상태 표시
     match_count = len(load_match_history())
     badmanner_count = len(load_badmanner_list())
@@ -138,46 +154,6 @@ with header_right:
         f"📊 매치: {match_count} | 🚫 비매너: {badmanner_count}</p>",
         unsafe_allow_html=True
     )
-    
-    # 백업/복원 버튼
-    backup_col, restore_col = st.columns(2)
-    
-    with backup_col:
-        # 다운로드 버튼
-        backup_data = export_all_data()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        st.download_button(
-            label="💾 백업",
-            data=backup_data,
-            file_name=f"fightcade_backup_{timestamp}.json",
-            mime="application/json",
-            use_container_width=True,
-            key="backup_btn"
-        )
-    
-    with restore_col:
-        # 복원 팝오버 (expander 사용)
-        with st.popover("📂 복원", use_container_width=True):
-            uploaded_file = st.file_uploader(
-                "백업 파일 선택",
-                type=["json"],
-                key="restore_file",
-                label_visibility="collapsed"
-            )
-            
-            if uploaded_file is not None:
-                if st.button("✅ 복원 실행", key="restore_confirm", use_container_width=True):
-                    try:
-                        json_str = uploaded_file.read().decode("utf-8")
-                        success, message = import_all_data(json_str)
-                        
-                        if success:
-                            st.success(message)
-                            st.rerun()
-                        else:
-                            st.error(message)
-                    except Exception as e:
-                        st.error(f"파일 읽기 오류: {str(e)}")
 
 st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 0.5rem 0 1rem 0;'>", unsafe_allow_html=True)
 
@@ -202,10 +178,57 @@ with bottom_right:
         render_quadrant_4()
 
 # =============================================================================
+# 하단: 백업/복원 버튼
+# =============================================================================
+st.markdown("<hr style='border-color: rgba(255,255,255,0.1); margin: 1rem 0 0.5rem 0;'>", unsafe_allow_html=True)
+
+footer_left, footer_center, footer_right = st.columns([2, 2, 1])
+
+with footer_right:
+    backup_col, restore_col = st.columns(2)
+    
+    with backup_col:
+        # 다운로드 버튼
+        backup_data = export_all_data()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        st.download_button(
+            label="💾 백업",
+            data=backup_data,
+            file_name=f"fightcade_backup_{timestamp}.json",
+            mime="application/json",
+            use_container_width=True,
+            key="backup_btn"
+        )
+    
+    with restore_col:
+        # 복원 팝오버
+        with st.popover("📂 복원", use_container_width=True):
+            uploaded_file = st.file_uploader(
+                "백업 파일 선택",
+                type=["json"],
+                key="restore_file",
+                label_visibility="collapsed"
+            )
+            
+            if uploaded_file is not None:
+                if st.button("✅ 복원 실행", key="restore_confirm", use_container_width=True):
+                    try:
+                        json_str = uploaded_file.read().decode("utf-8")
+                        success, message = import_all_data(json_str)
+                        
+                        if success:
+                            st.success(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
+                    except Exception as e:
+                        st.error(f"파일 읽기 오류: {str(e)}")
+
+# =============================================================================
 # 푸터
 # =============================================================================
 st.markdown(
-    "<p style='text-align: center; color: rgba(255,255,255,0.2); font-size: 0.75rem; margin-top: 1rem;'>"
+    "<p style='text-align: center; color: rgba(255,255,255,0.2); font-size: 0.75rem; margin-top: 0.5rem;'>"
     "Fightcade 승률 분석기 v2.0"
     "</p>",
     unsafe_allow_html=True
